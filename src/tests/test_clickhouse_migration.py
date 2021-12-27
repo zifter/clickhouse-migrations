@@ -1,3 +1,4 @@
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -103,3 +104,10 @@ def test_should_migrate_empty_database(migrator):
         assert len(tables) == 2
         assert tables.name.values[0] == "sample"
         assert tables.name.values[1] == "schema_versions"
+
+
+def test_empty_migrations(migrator):
+    clean_slate(migrator)
+
+    with tempfile.TemporaryDirectory("empty_dir") as d:
+        migrator.migrate("pytest", d)
