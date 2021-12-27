@@ -1,3 +1,8 @@
+[![ci](https://github.com/zifter/clickhouse-migrations/actions/workflows/ci.yaml/badge.svg)](https://github.com/zifter/clickhouse-migrations/actions/workflows/ci.yaml)
+[![release](https://img.shields.io/github/release/zifter/clickhouse-migrations.svg)](https://github.com/zifter/clickhouse-migrations/releases)
+[![supported versions](https://img.shields.io/pypi/pyversions/clickhouse-migrations.svg)](https://pypi.org/project/clickhouse-migrations/)
+[![my site](https://img.shields.io/badge/site-my%20blog-yellow.svg)](https://zifter.github.io/)
+
 ## Clickhouse Migrator
 
 [Clickhouse](https://clickhouse.tech/) is known for its scale to store and fetch large datasets.
