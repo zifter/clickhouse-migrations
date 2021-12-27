@@ -1,8 +1,10 @@
+import tempfile
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from clickhouse_migrations.cmd import get_context, migrate
 from clickhouse_migrations.migrate import execute_and_inflate, migrations_to_apply
 from clickhouse_migrations.migrator import Migrator
 
@@ -90,8 +92,6 @@ def test_should_return_migrations_to_run(migrator):
 
 
 def test_should_migrate_empty_database(migrator):
-    clean_slate(migrator)
-
     with migrator.connection("pytest") as conn:
         tables = execute_and_inflate(conn, "show tables")
         assert len(tables) == 1
@@ -103,3 +103,16 @@ def test_should_migrate_empty_database(migrator):
         assert len(tables) == 2
         assert tables.name.values[0] == "sample"
         assert tables.name.values[1] == "schema_versions"
+
+
+def test_empty_migrations_ok(migrator):
+    with tempfile.TemporaryDirectory("test") as d:
+        migrator.migrate("pytest", d)
+
+
+def test_main_pass_db_name_ok():
+    migrate(
+        get_context(
+            ["--db-name", "pytest", "--migrations-dir", str(TESTS_DIR / "migrations")]
+        )
+    )

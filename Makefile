@@ -4,7 +4,7 @@ setup:
 
 .PHONY: setup-dev
 setup-dev:
-	pyenv local 3.6.15 3.7.12 3.8.6 3.9.9 3.10.0 || true
+	pyenv local 3.10.0 3.9.9 3.8.6 3.7.12 3.6.15 || true
 	python3 -m pip install tox-pyenv
 
 .PHONY: test

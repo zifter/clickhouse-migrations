@@ -13,7 +13,7 @@ jobs:
   test:
     name: test ${{ matrix.py }} - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
