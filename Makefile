@@ -1,11 +1,17 @@
 .PHONY: setup
 setup:
-	python3 -m pip install tox
+	pip install tox
 
 .PHONY: setup-dev
 setup-dev:
-	pyenv local 3.10.0 3.9.9 3.8.6 3.7.12 3.6.15 || true
-	python3 -m pip install tox-pyenv
+	pyenv install -s 3.6.15
+	pyenv install -s 3.7.12
+	pyenv install -s 3.8.6
+	pyenv install -s 3.10.0
+	pyenv install -s 3.10.0
+	pyenv local 3.6.15 3.7.12 3.8.6 3.9.9 3.10.0
+	pip install tox-pyenv
+	python3 -m pip install tox
 
 .PHONY: test
 test:
@@ -22,7 +28,7 @@ build:
 
 .PHONY: publish
 publish:
-	tox -e upload
+	tox -e pypi_upload
 
 .PHONY: open-coverage
 open-coverage:
