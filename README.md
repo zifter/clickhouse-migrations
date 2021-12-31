@@ -15,30 +15,26 @@ We found there is nothing existing earlier and developed one inspired by, [Flywa
 This is a python library, which you can execute as a pre-hook using sys python.
 Or as a migration framework before deployment/server-startup in your application as required.
 
-
-### Publishing to pypi
-* python setup.py sdist
-* twine upload dist/*
-
-
 ### Installation
 
-You can install from pypi using `pip install clickhouse-migrator`.
+You can install from pypi using `pip install clickhouse-migrations`.
 
 ### Usage
 
 ```python
 from migration_lib.migrate import migrate
 
-migrate(db_name, migrations_home, db_host, db_user, db_password, create_db_if_no_exists)
+migrator = Migrator(db_host, db_user, db_password)
+migrator.migrate(db_name, migrations_home, create_db_if_no_exists)
 ```
 
 Parameter | Description | Default
 -------|-------------|---------
+db_host | Clickhouse database hostname | localhost
+db_user | Clickhouse uesr | ****
+db_password | ***** | ****
 db_name| Clickhouse database name | None
 migrations_home | Path to list of migration files | <project_root>
-db_host | Clickhouse database hostname | localhost
-db_password | ***** | ****
 create_db_if_no_exists | If the `db_name` is not present, enabling this will create the db | True
 
 ### Folder and Migration file patterns
@@ -47,4 +43,3 @@ The filenames are pretty similar to how `flyway` keeps it.
 
 Your first version filename should be prefixed with `V1__` (double underscore)
 These migrations are executed one by one, failures in between will stop and not further version files will be executed.
-

@@ -1,15 +1,21 @@
-import hashlib
-import os
-import pathlib
+import logging
+from pathlib import Path
 
 import pandas as pd
 from clickhouse_driver import Client
 
-from clickhouse_migrations.migrate import apply_migration, migrations_to_apply
+from .defaults import DB_HOST, DB_PASSWORD, DB_USER
+from .migrate import apply_migration, migrations_to_apply
+from .types import MigrationStorage
 
 
 class Migrator:
-    def __init__(self, db_host: str, db_user: str, db_password: str):
+    def __init__(
+        self,
+        db_host: str = DB_HOST,
+        db_user: str = DB_USER,
+        db_password: str = DB_PASSWORD,
+    ):
         self.db_host = db_host
         self.db_user = db_user
         self.db_password = db_password
@@ -37,24 +43,17 @@ class Migrator:
     def migrate(
         self,
         db_name: str,
-        migration_path: pathlib.Path,
+        migration_path: Path,
         create_db_if_no_exists: bool = True,
     ):
         if create_db_if_no_exists:
             self.create_db(db_name)
 
+        storage = MigrationStorage(migration_path)
+        migrations = storage.migrations()
+        logging.info("Total migrations: %d", len(migrations))
+
         with self.connection(db_name) as conn:
             self.init_schema(conn)
 
-            migrations = [
-                {
-                    "version": int(f.name.split("_")[0].replace("V", "")),
-                    "script": f"{migration_path}/{f.name}",
-                    "md5": hashlib.md5(
-                        pathlib.Path(f"{migration_path}/{f.name}").read_bytes()
-                    ).hexdigest(),
-                }
-                for f in os.scandir(f"{migration_path}")
-                if f.name.endswith(".sql")
-            ]
             apply_migration(conn, migrations_to_apply(conn, pd.DataFrame(migrations)))
