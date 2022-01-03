@@ -1,24 +1,23 @@
 import tempfile
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
+from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.cmd import get_context, migrate
-from clickhouse_migrations.migrate import execute_and_inflate, migrations_to_apply
-from clickhouse_migrations.migrator import Migrator
+from clickhouse_migrations.types import Migration
 
 TESTS_DIR = Path(__file__).parent
 
 
 @pytest.fixture
-def migrator():
-    return Migrator("localhost", "default", "")
+def cluster():
+    return ClickhouseCluster("localhost", "default", "")
 
 
 @pytest.fixture(autouse=True)
-def before(migrator):
-    clean_slate(migrator)
+def before(cluster):
+    clean_slate(cluster)
 
 
 def clean_slate(migrator):
@@ -26,90 +25,128 @@ def clean_slate(migrator):
         conn.execute("DROP DATABASE IF EXISTS pytest")
         conn.execute("CREATE DATABASE pytest")
 
-    with migrator.connection("pytest") as conn:
-        migrator.init_schema(conn)
+
+def test_empty_list_of_migrations_ok(cluster):
+    with tempfile.TemporaryDirectory("empty_dir") as d:
+        applied = cluster.migrate("pytest", d)
+
+        assert len(applied) == 0
 
 
-def test_should_compute_no_migrations_to_run(migrator):
-    with migrator.connection("pytest") as conn:
-        incoming = pd.DataFrame([])
-        results = migrations_to_apply(conn, incoming)
-        assert results.size == 0
+def test_deleted_migrations_exception(cluster):
+    cluster.init_schema("pytest")
 
-
-def test_should_raise_exception_on_deleted_migrations_no_incoming(migrator):
-    incoming = pd.DataFrame([])
-    with migrator.connection("pytest") as conn:
+    with cluster.connection("pytest") as conn:
         conn.execute(
             "INSERT INTO schema_versions(version, script, md5) VALUES",
             [{"version": 1, "script": "location_to_script", "md5": "1234"}],
         )
-        with pytest.raises(AssertionError):
-            migrations_to_apply(conn, incoming)
+
+    with pytest.raises(AssertionError):
+        cluster.apply_migrations("pytest", [])
 
 
-def test_should_raise_exceptions_on_missing_migration(migrator):
-    with migrator.connection("pytest") as conn:
-        incoming = pd.DataFrame(
-            [{"version": 2, "script": "location_to_script", "md5": "12345"}]
-        )
+def test_missing_migration_exception(cluster):
+    cluster.init_schema("pytest")
+
+    with cluster.connection("pytest") as conn:
         conn.execute(
             "INSERT INTO schema_versions(version, script, md5) VALUES",
             [{"version": 1, "script": "location_to_script", "md5": "1234"}],
         )
-        with pytest.raises(AssertionError):
-            migrations_to_apply(conn, incoming)
+
+    migrations = [
+        Migration(version=2, md5="12345", script="location_to_script"),
+    ]
+
+    with pytest.raises(AssertionError):
+        cluster.apply_migrations("pytest", migrations)
 
 
-def test_should_raise_exceptions_on_modified_post_committed_migrations(migrator):
-    with migrator.connection("pytest") as conn:
-        incoming = pd.DataFrame(
-            [{"version": 1, "script": "location_to_script", "md5": "12345"}]
-        )
+def test_modified_committed_migrations_exception(cluster):
+    cluster.init_schema("pytest")
+
+    with cluster.connection("pytest") as conn:
         conn.execute(
             "INSERT INTO schema_versions(version, script, md5) VALUES",
             [{"version": 1, "script": "location_to_script", "md5": "1234"}],
         )
-        with pytest.raises(AssertionError):
-            migrations_to_apply(conn, incoming)
+
+    migrations = [
+        Migration(version=1, md5="12345", script="location_to_script"),
+    ]
+
+    with pytest.raises(AssertionError):
+        cluster.apply_migrations("pytest", migrations)
 
 
-def test_should_return_migrations_to_run(migrator):
-    with migrator.connection("pytest") as conn:
-        incoming = pd.DataFrame(
-            [
-                {"version": 1, "script": "location_to_script", "md5": "1234"},
-                {"version": 2, "script": "location_to_script_2", "md5": "1234"},
-            ]
-        )
+def test_apply_new_migration_ok(cluster):
+    cluster.init_schema("pytest")
+
+    with cluster.connection("pytest") as conn:
         conn.execute(
             "INSERT INTO schema_versions(version, script, md5) VALUES",
-            [{"version": 1, "script": "location_to_script", "md5": "1234"}],
+            [{"version": 1, "script": "SHOW TABLES", "md5": "12345"}],
         )
-        results = migrations_to_apply(conn, incoming)
-        assert len(results) == 1
-        assert results.version.values[0] == 2
+
+    migrations = [
+        Migration(version=1, md5="12345", script="SHOW TABLES"),
+        Migration(version=2, md5="12345", script="SHOW TABLES"),
+    ]
+
+    results = cluster.apply_migrations("pytest", migrations)
+    assert len(results) == 1
+    assert results[0] == migrations[-1]
 
 
-def test_should_migrate_empty_database(migrator):
-    with migrator.connection("pytest") as conn:
-        tables = execute_and_inflate(conn, "show tables")
-        assert len(tables) == 1
-        assert tables.name.values[0] == "schema_versions"
+def test_apply_two_new_migration_ok(cluster):
+    cluster.init_schema("pytest")
 
-        migrator.migrate("pytest", TESTS_DIR / "migrations")
+    with cluster.connection("pytest") as conn:
+        conn.execute(
+            "INSERT INTO schema_versions(version, script, md5) VALUES",
+            [{"version": 1, "script": "SHOW TABLES", "md5": "111"}],
+        )
 
-        tables = execute_and_inflate(conn, "show tables")
-        assert len(tables) == 2
-        assert tables.name.values[0] == "sample"
-        assert tables.name.values[1] == "schema_versions"
+        conn.execute(
+            "INSERT INTO schema_versions(version, script, md5) VALUES",
+            [{"version": 2, "script": "SHOW TABLES", "md5": "222"}],
+        )
+
+    migrations = [
+        Migration(version=1, md5="111", script="SHOW TABLES"),
+        Migration(version=2, md5="222", script="SHOW TABLES"),
+        Migration(version=3, md5="333", script="SHOW TABLES"),
+        Migration(version=4, md5="444", script="SHOW TABLES"),
+        Migration(version=5, md5="444", script="SHOW TABLES"),
+    ]
+
+    results = cluster.apply_migrations("pytest", migrations)
+    assert len(results) == 3
+    assert results[0] == migrations[-3]
+    assert results[1] == migrations[-2]
+    assert results[2] == migrations[-1]
 
 
-def test_empty_migrations(migrator):
-    clean_slate(migrator)
+def test_should_migrate_empty_database(cluster):
+    cluster.create_db("pytest")
+
+    tables = cluster.show_tables("pytest")
+    assert len(tables) == 0
+
+    cluster.migrate("pytest", TESTS_DIR / "migrations")
+
+    tables = cluster.show_tables("pytest")
+    assert len(tables) == 2
+    assert tables[0] == "sample"
+    assert tables[1] == "schema_versions"
+
+
+def test_migrations_folder_is_empty_ok(cluster):
+    clean_slate(cluster)
 
     with tempfile.TemporaryDirectory("empty_dir") as d:
-        migrator.migrate("pytest", d)
+        cluster.migrate("pytest", d)
 
 
 def test_main_pass_db_name_ok():

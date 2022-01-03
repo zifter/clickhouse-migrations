@@ -25,7 +25,7 @@ class MigrationStorage:
         for full_path in self.filenames():
             migration = Migration(
                 version=int(full_path.name.split("_")[0].replace("V", "")),
-                script=str(full_path),
+                script=str(full_path.read_text(encoding="utf8")),
                 md5=hashlib.md5(full_path.read_bytes()).hexdigest(),
             )
 

@@ -1,37 +1,18 @@
 import logging
-from pathlib import Path
+from typing import List
 
-import pandas as pd
+import pandas
 from clickhouse_driver import Client
 
-from .defaults import DB_HOST, DB_PASSWORD, DB_USER
-from .migrate import apply_migration, migrations_to_apply
-from .types import MigrationStorage
+from clickhouse_migrations.types import Migration
 
 
 class Migrator:
-    def __init__(
-        self,
-        db_host: str = DB_HOST,
-        db_user: str = DB_USER,
-        db_password: str = DB_PASSWORD,
-    ):
-        self.db_host = db_host
-        self.db_user = db_user
-        self.db_password = db_password
+    def __init__(self, conn: Client):
+        self._conn: Client = conn
 
-    def connection(self, db_name: str) -> Client:
-        return Client(
-            self.db_host, user=self.db_user, password=self.db_password, database=db_name
-        )
-
-    def create_db(self, db_name):
-        with self.connection("") as conn:
-            conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
-
-    @classmethod
-    def init_schema(cls, conn):
-        conn.execute(
+    def init_schema(self):
+        self._conn.execute(
             "CREATE TABLE IF NOT EXISTS schema_versions ("
             "version UInt32, "
             "md5 String, "
@@ -40,20 +21,76 @@ class Migrator:
             ") ENGINE = MergeTree ORDER BY tuple(created_at)"
         )
 
-    def migrate(
-        self,
-        db_name: str,
-        migration_path: Path,
-        create_db_if_no_exists: bool = True,
-    ):
-        if create_db_if_no_exists:
-            self.create_db(db_name)
+    def execute_and_inflate(self, query) -> pandas.DataFrame:
+        result = self._conn.execute(query, with_column_types=True)
+        column_names = [c[0] for c in result[len(result) - 1]]
+        return pandas.DataFrame([dict(zip(column_names, d)) for d in result[0]])
 
-        storage = MigrationStorage(migration_path)
-        migrations = storage.migrations()
-        logging.info("Total migrations: %d", len(migrations))
+    def migrations_to_apply(self, migrations: List[Migration]) -> List[Migration]:
+        applied_migrations = self.execute_and_inflate(
+            "SELECT version AS version, script AS c_script, md5 as c_md5 from schema_versions",
+        )
 
-        with self.connection(db_name) as conn:
-            self.init_schema(conn)
+        if applied_migrations.empty:
+            return migrations
 
-            apply_migration(conn, migrations_to_apply(conn, pd.DataFrame(migrations)))
+        incoming = pandas.DataFrame(migrations)
+        if len(incoming) == 0 or len(incoming) < len(applied_migrations):
+            raise AssertionError(
+                "Migrations have gone missing, "
+                "your code base should not truncate migrations, "
+                "use migrations to correct older migrations"
+            )
+
+        applied_migrations = applied_migrations.astype({"version": "int32"})
+        incoming = incoming.astype({"version": "int32"})
+        exec_stat = pandas.merge(
+            applied_migrations, incoming, on="version", how="outer"
+        )
+        committed_and_absconded = exec_stat[
+            exec_stat.c_md5.notnull() & exec_stat.md5.isnull()
+        ]
+        if len(committed_and_absconded) > 0:
+            raise AssertionError(
+                "Migrations have gone missing, "
+                "your code base should not truncate migrations, "
+                "use migrations to correct older migrations"
+            )
+
+        index = (
+            exec_stat.c_md5.notnull()
+            & exec_stat.md5.notnull()
+            & ~(exec_stat.md5 == exec_stat.c_md5)
+        )
+        terms_violated = exec_stat[index]
+        if len(terms_violated) > 0:
+            raise AssertionError(
+                "Do not edit migrations once run, "
+                "use migrations to correct older migrations"
+            )
+        versions_to_apply = exec_stat[exec_stat.c_md5.isnull()][["version"]]
+        return [m for m in migrations if m.version in versions_to_apply.values]
+
+    def apply_migration(self, migrations: List[Migration]) -> List[Migration]:
+        new_migrations = self.migrations_to_apply(migrations)
+        if not new_migrations:
+            return []
+
+        for migration in new_migrations:
+            logging.info("Execute migration %s", migration)
+            self._conn.execute(migration.script)
+
+            logging.info("Migration applied")
+
+            self._conn.execute(
+                "INSERT INTO schema_versions(version, script, md5) VALUES",
+                [
+                    {
+                        "version": migration.version,
+                        "script": migration.script,
+                        "md5": migration.md5,
+                    }
+                ],
+            )
+
+        return new_migrations

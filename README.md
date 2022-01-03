@@ -22,10 +22,10 @@ You can install from pypi using `pip install clickhouse-migrations`.
 ### Usage
 
 ```python
-from migration_lib.migrate import migrate
+from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 
-migrator = Migrator(db_host, db_user, db_password)
-migrator.migrate(db_name, migrations_home, create_db_if_no_exists)
+cluster = ClickhouseCluster(db_host, db_user, db_password)
+cluster.migrate(db_name, migrations_home, create_db_if_no_exists)
 ```
 
 Parameter | Description | Default
