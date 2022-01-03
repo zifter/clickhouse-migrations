@@ -3,6 +3,7 @@ import sys
 from argparse import ArgumentParser
 from pathlib import Path
 
+from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.defaults import (
     DB_HOST,
     DB_NAME,
@@ -10,7 +11,6 @@ from clickhouse_migrations.defaults import (
     DB_USER,
     MIGRATIONS_DIR,
 )
-from clickhouse_migrations.migrator import Migrator
 
 
 def get_context(args):
@@ -46,8 +46,8 @@ def get_context(args):
 
 
 def migrate(context) -> int:
-    migrator = Migrator(context.db_host, context.db_user, context.db_password)
-    migrator.migrate(context.db_name, Path(context.migrations_dir))
+    cluster = ClickhouseCluster(context.db_host, context.db_user, context.db_password)
+    cluster.migrate(context.db_name, Path(context.migrations_dir))
     return 0
 
 
