@@ -4,6 +4,7 @@ from typing import List
 import pandas
 from clickhouse_driver import Client
 
+from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.types import Migration
 
 
@@ -36,7 +37,7 @@ class Migrator:
 
         incoming = pandas.DataFrame(migrations)
         if len(incoming) == 0 or len(incoming) < len(applied_migrations):
-            raise AssertionError(
+            raise MigrationException(
                 "Migrations have gone missing, "
                 "your code base should not truncate migrations, "
                 "use migrations to correct older migrations"
@@ -51,7 +52,7 @@ class Migrator:
             exec_stat.c_md5.notnull() & exec_stat.md5.isnull()
         ]
         if len(committed_and_absconded) > 0:
-            raise AssertionError(
+            raise MigrationException(
                 "Migrations have gone missing, "
                 "your code base should not truncate migrations, "
                 "use migrations to correct older migrations"
@@ -64,21 +65,27 @@ class Migrator:
         )
         terms_violated = exec_stat[index]
         if len(terms_violated) > 0:
-            raise AssertionError(
+            raise MigrationException(
                 "Do not edit migrations once run, "
                 "use migrations to correct older migrations"
             )
         versions_to_apply = exec_stat[exec_stat.c_md5.isnull()][["version"]]
         return [m for m in migrations if m.version in versions_to_apply.values]
 
-    def apply_migration(self, migrations: List[Migration]) -> List[Migration]:
+    def apply_migration(
+        self, migrations: List[Migration], multi_statement
+    ) -> List[Migration]:
         new_migrations = self.migrations_to_apply(migrations)
         if not new_migrations:
             return []
 
         for migration in new_migrations:
             logging.info("Execute migration %s", migration)
-            self._conn.execute(migration.script)
+
+            statements = self.script_to_statements(migration.script, multi_statement)
+            for statement in statements:
+                statement = statement.strip()
+                self._conn.execute(statement)
 
             logging.info("Migration applied")
 
@@ -94,3 +101,12 @@ class Migrator:
             )
 
         return new_migrations
+
+    @classmethod
+    def script_to_statements(cls, script: str, multi_statement) -> List[str]:
+        script = script.strip()
+
+        if multi_statement:
+            return [m.strip() for m in script.split(";") if m]
+
+        return [script]

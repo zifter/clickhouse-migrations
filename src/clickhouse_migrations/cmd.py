@@ -41,13 +41,20 @@ def get_context(args):
         default=os.environ.get("MIGRATIONS_DIR", MIGRATIONS_DIR),
         help="Path to list of migration files",
     )
+    parser.add_argument(
+        "--multi-statement",
+        default=os.environ.get("MULTI_STATEMENT", "1"),
+        help="Path to list of migration files",
+    )
 
     return parser.parse_args(args)
 
 
 def migrate(context) -> int:
     cluster = ClickhouseCluster(context.db_host, context.db_user, context.db_password)
-    cluster.migrate(context.db_name, Path(context.migrations_dir))
+    cluster.migrate(
+        context.db_name, Path(context.migrations_dir), int(context.multi_statement) == 1
+    )
     return 0
 
 
