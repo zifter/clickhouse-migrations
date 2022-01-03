@@ -44,12 +44,16 @@ class ClickhouseCluster:
         db_name: str,
         migration_path: Path,
         create_db_if_no_exists: bool = True,
+        multi_statement: bool = True,
     ):
         storage = MigrationStorage(migration_path)
         migrations = storage.migrations()
 
         return self.apply_migrations(
-            db_name, migrations, create_db_if_no_exists=create_db_if_no_exists
+            db_name,
+            migrations,
+            create_db_if_no_exists=create_db_if_no_exists,
+            multi_statement=multi_statement,
         )
 
     def apply_migrations(
@@ -57,6 +61,7 @@ class ClickhouseCluster:
         db_name: str,
         migrations: List[Migration],
         create_db_if_no_exists: bool = True,
+        multi_statement: bool = True,
     ) -> List[Migration]:
 
         if create_db_if_no_exists:
@@ -67,4 +72,4 @@ class ClickhouseCluster:
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
             migrator.init_schema()
-            return migrator.apply_migration(migrations)
+            return migrator.apply_migration(migrations, multi_statement)

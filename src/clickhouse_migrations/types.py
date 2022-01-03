@@ -12,23 +12,25 @@ class MigrationStorage:
         self.storage_dir: Path = storage_dir
 
     def filenames(self) -> List[Path]:
-        migrations: List[Path] = []
+        l: List[Path] = []
         for f in os.scandir(self.storage_dir):
             if f.name.endswith(".sql"):
-                migrations.append(self.storage_dir / f.name)
+                l.append(self.storage_dir / f.name)
 
-        return migrations
+        return l
 
     def migrations(self) -> List[Migration]:
         migrations: List[Migration] = []
 
         for full_path in self.filenames():
             migration = Migration(
-                version=int(full_path.name.split("_")[0].replace("V", "")),
+                version=int(full_path.name.split("_")[0]),
                 script=str(full_path.read_text(encoding="utf8")),
                 md5=hashlib.md5(full_path.read_bytes()).hexdigest(),
             )
 
             migrations.append(migration)
+
+        migrations.sort(key=lambda m: m.version)
 
         return migrations

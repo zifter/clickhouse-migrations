@@ -2,9 +2,11 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from clickhouse_driver.errors import ServerException
 
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.cmd import get_context, migrate
+from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.types import Migration
 
 TESTS_DIR = Path(__file__).parent
@@ -42,7 +44,7 @@ def test_deleted_migrations_exception(cluster):
             [{"version": 1, "script": "location_to_script", "md5": "1234"}],
         )
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(MigrationException):
         cluster.apply_migrations("pytest", [])
 
 
@@ -59,7 +61,7 @@ def test_missing_migration_exception(cluster):
         Migration(version=2, md5="12345", script="location_to_script"),
     ]
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(MigrationException):
         cluster.apply_migrations("pytest", migrations)
 
 
@@ -76,7 +78,7 @@ def test_modified_committed_migrations_exception(cluster):
         Migration(version=1, md5="12345", script="location_to_script"),
     ]
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(MigrationException):
         cluster.apply_migrations("pytest", migrations)
 
 
@@ -143,10 +145,23 @@ def test_should_migrate_empty_database(cluster):
 
 
 def test_migrations_folder_is_empty_ok(cluster):
-    clean_slate(cluster)
-
     with tempfile.TemporaryDirectory("empty_dir") as d:
         cluster.migrate("pytest", d)
+
+
+def test_multi_statement_migration_by_default_ok(cluster):
+    cluster.migrate("pytest", TESTS_DIR / "multi_statements_migrations")
+
+
+def test_multi_statement_migration_disabled_ok(cluster):
+    with pytest.raises(ServerException):
+        cluster.migrate(
+            "pytest", TESTS_DIR / "multi_statements_migrations", multi_statement=False
+        )
+
+
+def test_complex_ok(cluster):
+    cluster.migrate("pytest", TESTS_DIR / "complex_migrations")
 
 
 def test_main_pass_db_name_ok():
