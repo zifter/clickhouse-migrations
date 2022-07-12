@@ -29,7 +29,11 @@ class Migrator:
 
     def migrations_to_apply(self, migrations: List[Migration]) -> List[Migration]:
         applied_migrations = self.execute_and_inflate(
-            "SELECT version AS version, script AS c_script, md5 as c_md5 from schema_versions",
+            """SELECT
+                version AS version,
+                script AS c_script,
+                md5 as c_md5
+            FROM schema_versions""",
         )
 
         if applied_migrations.empty:

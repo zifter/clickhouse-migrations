@@ -13,8 +13,14 @@ from clickhouse_migrations.defaults import (
 )
 
 
+def cast_to_bool(value: str):
+    return value.lower() in ("1", "true", "yes", "y")
+
+
 def get_context(args):
     parser = ArgumentParser()
+    parser.register("type", bool, cast_to_bool)
+
     # detect configuration
     parser.add_argument(
         "--db-host",
@@ -39,11 +45,13 @@ def get_context(args):
     parser.add_argument(
         "--migrations-dir",
         default=os.environ.get("MIGRATIONS_DIR", MIGRATIONS_DIR),
+        type=Path,
         help="Path to list of migration files",
     )
     parser.add_argument(
         "--multi-statement",
         default=os.environ.get("MULTI_STATEMENT", "1"),
+        type=bool,
         help="Path to list of migration files",
     )
 
@@ -52,11 +60,9 @@ def get_context(args):
 
 def migrate(context) -> int:
     cluster = ClickhouseCluster(context.db_host, context.db_user, context.db_password)
-    cluster.migrate(
-        context.db_name, Path(context.migrations_dir), int(context.multi_statement) == 1
-    )
+    cluster.migrate(context.db_name, context.migrations_dir, context.multi_statement)
     return 0
 
 
 def main() -> int:
-    return migrate(get_context(sys.argv[1:]))
+    return migrate(get_context(sys.argv[1:]))  # pragma: no cover

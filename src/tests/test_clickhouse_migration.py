@@ -170,3 +170,14 @@ def test_main_pass_db_name_ok():
             ["--db-name", "pytest", "--migrations-dir", str(TESTS_DIR / "migrations")]
         )
     )
+
+
+def test_check_multistatement_arg():
+    context = get_context(["--multi-statement", "false"])
+    assert context.multi_statement is False
+
+    context = get_context(["--multi-statement", "True"])
+    assert context.multi_statement is True
+
+    context = get_context(["--multi-statement", "0"])
+    assert context.multi_statement is False
