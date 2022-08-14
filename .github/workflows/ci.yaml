@@ -26,7 +26,6 @@ jobs:
           - "3.9"
           - "3.8"
           - "3.7"
-          - "3.6"
     steps:
       - name: Check out repository code
         uses: actions/checkout@v2
