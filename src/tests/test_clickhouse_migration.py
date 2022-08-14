@@ -29,8 +29,8 @@ def clean_slate(migrator):
 
 
 def test_empty_list_of_migrations_ok(cluster):
-    with tempfile.TemporaryDirectory("empty_dir") as d:
-        applied = cluster.migrate("pytest", d)
+    with tempfile.TemporaryDirectory("empty_dir") as temp_dir:
+        applied = cluster.migrate("pytest", temp_dir)
 
         assert len(applied) == 0
 
@@ -145,8 +145,8 @@ def test_should_migrate_empty_database(cluster):
 
 
 def test_migrations_folder_is_empty_ok(cluster):
-    with tempfile.TemporaryDirectory("empty_dir") as d:
-        cluster.migrate("pytest", d)
+    with tempfile.TemporaryDirectory("empty_dir") as temp_dir:
+        cluster.migrate("pytest", temp_dir)
 
 
 def test_multi_statement_migration_by_default_ok(cluster):
