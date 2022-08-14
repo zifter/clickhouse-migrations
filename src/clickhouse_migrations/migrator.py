@@ -1,7 +1,6 @@
 import logging
-from typing import List
+from typing import Dict, List, Tuple
 
-import pandas
 from clickhouse_driver import Client
 
 from clickhouse_migrations.exceptions import MigrationException
@@ -22,62 +21,67 @@ class Migrator:
             ") ENGINE = MergeTree ORDER BY tuple(created_at)"
         )
 
-    def execute_and_inflate(self, query) -> pandas.DataFrame:
+    def query_applied_migrations(self) -> List[Migration]:
+        query = """SELECT
+            version,
+            script,
+            md5
+        FROM schema_versions"""
+
         result = self._conn.execute(query, with_column_types=True)
         column_names = [c[0] for c in result[len(result) - 1]]
-        return pandas.DataFrame([dict(zip(column_names, d)) for d in result[0]])
 
-    def migrations_to_apply(self, migrations: List[Migration]) -> List[Migration]:
-        applied_migrations = self.execute_and_inflate(
-            """SELECT
-                version AS version,
-                script AS c_script,
-                md5 as c_md5
-            FROM schema_versions""",
-        )
+        migrations_as_dict = [dict(zip(column_names, d)) for d in result[0]]
 
-        if applied_migrations.empty:
-            return migrations
+        return [Migration(**d) for d in migrations_as_dict]
 
-        incoming = pandas.DataFrame(migrations)
-        if len(incoming) == 0 or len(incoming) < len(applied_migrations):
+    def migrations_to_apply(self, incoming: List[Migration]) -> List[Migration]:
+        applied = self.query_applied_migrations()
+
+        if not applied:
+            return incoming
+
+        if len(incoming) == 0 or len(incoming) < len(applied):
             raise MigrationException(
                 "Migrations have gone missing, "
                 "your code base should not truncate migrations, "
                 "use migrations to correct older migrations"
             )
 
-        applied_migrations = applied_migrations.astype({"version": "int32"})
-        incoming = incoming.astype({"version": "int32"})
-        exec_stat = pandas.merge(
-            applied_migrations, incoming, on="version", how="outer"
-        )
-        committed_and_absconded = exec_stat[
-            exec_stat.c_md5.notnull() & exec_stat.md5.isnull()
+        # create outer join
+        joined_migrations: Dict[Tuple[Migration, Migration]] = {
+            m.version: [m, None] for m in incoming
+        }
+        for m in applied:
+            if m.version in joined_migrations:
+                joined_migrations[m.version][1] = m
+            else:
+                joined_migrations[m.version] = [None, m]
+
+        # md5 of applied function must be equal
+        for version, p in joined_migrations.items():
+            left, right = p
+            if left and right and left.md5 != right.md5:
+                raise MigrationException(
+                    "Migrations md5 is not equal, " f"Migration version is {version}."
+                )
+
+        # all migrations should be known
+        for version, p in joined_migrations.items():
+            left, right = p
+            if not left and right:
+                raise MigrationException(
+                    "There is applied migrations, which is not known by current migrations list. "
+                    f"Migration version is {version}."
+                )
+
+        to_apply = [
+            left for left, right in joined_migrations.values() if left and not right
         ]
-        if len(committed_and_absconded) > 0:
-            raise MigrationException(
-                "Migrations have gone missing, "
-                "your code base should not truncate migrations, "
-                "use migrations to correct older migrations"
-            )
-
-        index = (
-            exec_stat.c_md5.notnull()
-            & exec_stat.md5.notnull()
-            & ~(exec_stat.md5 == exec_stat.c_md5)
-        )
-        terms_violated = exec_stat[index]
-        if len(terms_violated) > 0:
-            raise MigrationException(
-                "Do not edit migrations once run, "
-                "use migrations to correct older migrations"
-            )
-        versions_to_apply = exec_stat[exec_stat.c_md5.isnull()][["version"]]
-        return [m for m in migrations if m.version in versions_to_apply.values]
+        return sorted(to_apply, key=lambda x: x.version)
 
     def apply_migration(
-        self, migrations: List[Migration], multi_statement
+        self, migrations: List[Migration], multi_statement: bool
     ) -> List[Migration]:
         new_migrations = self.migrations_to_apply(migrations)
         if not new_migrations:
@@ -91,7 +95,7 @@ class Migrator:
                 statement = statement.strip()
                 self._conn.execute(statement)
 
-            logging.info("Migration applied")
+            logging.info("Migration applied. Update schema version table.")
 
             self._conn.execute(
                 "INSERT INTO schema_versions(version, script, md5) VALUES",
@@ -107,7 +111,7 @@ class Migrator:
         return new_migrations
 
     @classmethod
-    def script_to_statements(cls, script: str, multi_statement) -> List[str]:
+    def script_to_statements(cls, script: str, multi_statement: bool) -> List[str]:
         script = script.strip()
 
         if multi_statement:

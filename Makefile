@@ -7,7 +7,7 @@ setup-dev:
 	pyenv install -s 3.6.15
 	pyenv install -s 3.7.12
 	pyenv install -s 3.8.6
-	pyenv install -s 3.10.0
+	pyenv install -s 3.9.9
 	pyenv install -s 3.10.0
 	pyenv local 3.6.15 3.7.12 3.8.6 3.9.9 3.10.0
 	pip install tox-pyenv
