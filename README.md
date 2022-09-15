@@ -6,7 +6,7 @@
 
 # Clickhouse Migrations
 
-[Clickhouse](https://clickhouse.tech/) is known for its scale to store and fetch large datasets.
+Python library for creating and applying migrations in ClickHouse database.
 
 Development and Maintenance of large-scale db systems many times requires constant changes to the actual DB system.
 Holding off the scripts to migrate these will be painful.
@@ -15,6 +15,15 @@ Holding off the scripts to migrate these will be painful.
 * Supports multi statements - more than one query per migration file.
 * Allow running migrations out-of-box
 * Simple file migrations format: {VERSION}_{name}.sql
+
+## Known alternatives
+This package originally forked from [clickhouse-migrator](https://github.com/delium/clickhouse-migrator).
+
+Package | Differences
+-------|---------
+[clickhouse-migrator](https://github.com/delium/clickhouse-migrator) | Doesn't support multistatement in a single file , to heavy because of pandas, looks like abandoned
+[django-clickhouse](https://github.com/carrotquest/django-clickhouse) | Need django
+[clickhouse-migrate](https://github.com/trushad0w/clickhouse-migrate) | Doesn't support multistatement
 
 ## Installation
 
