@@ -8,6 +8,7 @@ from clickhouse_migrations.defaults import (
     DB_HOST,
     DB_NAME,
     DB_PASSWORD,
+    DB_PORT,
     DB_USER,
     MIGRATIONS_DIR,
 )
@@ -26,6 +27,11 @@ def get_context(args):
         "--db-host",
         default=os.environ.get("DB_HOST", DB_HOST),
         help="Clickhouse database hostname",
+    )
+    parser.add_argument(
+        "--db-port",
+        default=os.environ.get("DB_PORT", DB_PORT),
+        help="Clickhouse database port",
     )
     parser.add_argument(
         "--db-user",
@@ -58,9 +64,14 @@ def get_context(args):
     return parser.parse_args(args)
 
 
-def migrate(context) -> int:
-    cluster = ClickhouseCluster(context.db_host, context.db_user, context.db_password)
-    cluster.migrate(context.db_name, context.migrations_dir, context.multi_statement)
+def migrate(ctx) -> int:
+    cluster = ClickhouseCluster(
+        ctx.db_host,
+        db_port=ctx.db_port,
+        db_user=ctx.db_user,
+        db_password=ctx.db_password,
+    )
+    cluster.migrate(ctx.db_name, ctx.migrations_dir, ctx.multi_statement)
     return 0
 
 
