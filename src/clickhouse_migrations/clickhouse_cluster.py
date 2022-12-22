@@ -4,7 +4,7 @@ from typing import List
 
 from clickhouse_driver import Client
 
-from clickhouse_migrations.defaults import DB_HOST, DB_PASSWORD, DB_USER
+from clickhouse_migrations.defaults import DB_HOST, DB_PASSWORD, DB_PORT, DB_USER
 from clickhouse_migrations.migrator import Migrator
 from clickhouse_migrations.types import Migration, MigrationStorage
 
@@ -15,14 +15,23 @@ class ClickhouseCluster:
         db_host: str = DB_HOST,
         db_user: str = DB_USER,
         db_password: str = DB_PASSWORD,
+        db_port: str = DB_PORT,
+        **kwargs,
     ):
         self.db_host = db_host
+        self.db_port = db_port
         self.db_user = db_user
         self.db_password = db_password
+        self.connection_kwargs = kwargs
 
     def connection(self, db_name: str) -> Client:
         return Client(
-            self.db_host, user=self.db_user, password=self.db_password, database=db_name
+            self.db_host,
+            port=self.db_port,
+            user=self.db_user,
+            password=self.db_password,
+            database=db_name,
+            **self.connection_kwargs,
         )
 
     def create_db(self, db_name):
