@@ -12,7 +12,7 @@ class Migrator:
         self._conn: Client = conn
 
     def init_schema(self):
-        self._conn.execute(
+        self._execute(
             "CREATE TABLE IF NOT EXISTS schema_versions ("
             "version UInt32, "
             "md5 String, "
@@ -28,7 +28,7 @@ class Migrator:
             md5
         FROM schema_versions"""
 
-        result = self._conn.execute(query, with_column_types=True)
+        result = self._execute(query, with_column_types=True)
         column_names = [c[0] for c in result[len(result) - 1]]
 
         migrations_as_dict = [dict(zip(column_names, d)) for d in result[0]]
@@ -91,13 +91,14 @@ class Migrator:
             logging.info("Execute migration %s", migration)
 
             statements = self.script_to_statements(migration.script, multi_statement)
+
+            logging.info("Migration contains %s statements to apply", len(statements))
             for statement in statements:
-                statement = statement.strip()
-                self._conn.execute(statement)
+                self._execute(statement)
 
-            logging.info("Migration applied. Update schema version table.")
+            logging.info("Migration applied, need to update schema version table.")
 
-            self._conn.execute(
+            self._execute(
                 "INSERT INTO schema_versions(version, script, md5) VALUES",
                 [
                     {
@@ -108,13 +109,23 @@ class Migrator:
                 ],
             )
 
+            logging.info("Migration is fully applied.")
+
         return new_migrations
+
+    def _execute(self, statement, *args, **kwargs):
+        logging.debug(statement)
+        return self._conn.execute(statement, *args, **kwargs)
 
     @classmethod
     def script_to_statements(cls, script: str, multi_statement: bool) -> List[str]:
-        script = script.strip()
-
+        statements = []
         if multi_statement:
-            return [m.strip() for m in script.split(";") if m]
+            for statement in script.split(";"):
+                statement = statement.strip()
+                if statement:
+                    statements.append(statement + ";")
+        else:
+            statements.append(script.strip())
 
-        return [script]
+        return statements

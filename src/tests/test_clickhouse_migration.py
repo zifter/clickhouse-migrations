@@ -160,6 +160,10 @@ def test_multi_statement_migration_disabled_ok(cluster):
         )
 
 
+def test_issue_15_ok(cluster):
+    cluster.migrate("pytest", TESTS_DIR / "issue_15", multi_statement=True)
+
+
 def test_complex_ok(cluster):
     cluster.migrate("pytest", TESTS_DIR / "complex_migrations")
 
