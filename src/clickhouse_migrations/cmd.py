@@ -77,8 +77,7 @@ def get_context(args):
 
 
 def migrate(ctx) -> int:
-    rl = logging.getLogger(None)
-    rl.setLevel(ctx.log_level)
+    logging.basicConfig(level=ctx.log_level, style="{", format='{levelname}:{message}')
 
     cluster = ClickhouseCluster(
         ctx.db_host,
