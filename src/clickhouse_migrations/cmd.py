@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -13,6 +14,11 @@ from clickhouse_migrations.defaults import (
     MIGRATIONS_DIR,
 )
 
+def log_level(value: str) -> str:
+    if value.upper() in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        return value.upper()
+    else:
+        raise ValueError
 
 def cast_to_bool(value: str):
     return value.lower() in ("1", "true", "yes", "y")
@@ -60,11 +66,20 @@ def get_context(args):
         type=bool,
         help="Path to list of migration files",
     )
+    parser.add_argument(
+        "--log-level",
+        default=os.environ.get("LOG_LEVEL", "WARNING"),
+        type=log_level,
+        help="Log level"
+    )
 
     return parser.parse_args(args)
 
 
 def migrate(ctx) -> int:
+    rl = logging.getLogger(None)
+    rl.setLevel(ctx.log_level)
+
     cluster = ClickhouseCluster(
         ctx.db_host,
         db_port=ctx.db_port,
