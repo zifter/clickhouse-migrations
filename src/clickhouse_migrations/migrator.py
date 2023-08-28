@@ -84,6 +84,9 @@ class Migrator:
         self, migrations: List[Migration], multi_statement: bool
     ) -> List[Migration]:
         new_migrations = self.migrations_to_apply(migrations)
+
+        logging.info("Total migrations to apply: %d", len(new_migrations))
+
         if not new_migrations:
             return []
 

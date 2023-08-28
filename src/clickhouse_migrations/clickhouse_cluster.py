@@ -76,8 +76,6 @@ class ClickhouseCluster:
         if create_db_if_no_exists:
             self.create_db(db_name)
 
-        logging.info("Total migrations to apply: %d", len(migrations))
-
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
             migrator.init_schema()
