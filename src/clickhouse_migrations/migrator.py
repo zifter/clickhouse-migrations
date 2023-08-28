@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from clickhouse_driver import Client
 
@@ -11,14 +11,26 @@ class Migrator:
     def __init__(self, conn: Client):
         self._conn: Client = conn
 
-    def init_schema(self):
+    def init_schema(self, cluster: Optional[str]):
+        cluster_schema = \
+f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER "{cluster}" (
+    version UInt32,
+    md5 String,
+    script String,
+    created_at DateTime DEFAULT now()
+) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{database}}/schema_versions', '{{replica}}')
+ORDER BY tuple(created_at)"""
+
+        single_schema = \
+"""CREATE TABLE IF NOT EXISTS schema_versions (
+    version UInt32,
+    md5 String,
+    script String,
+    created_at DateTime DEFAULT now()
+) ENGINE = MergeTree ORDER BY tuple(created_at)"""
+
         self._execute(
-            "CREATE TABLE IF NOT EXISTS schema_versions ("
-            "version UInt32, "
-            "md5 String, "
-            "script String, "
-            "created_at DateTime DEFAULT now()"
-            ") ENGINE = MergeTree ORDER BY tuple(created_at)"
+            single_schema if cluster is None else cluster_schema
         )
 
     def query_applied_migrations(self) -> List[Migration]:

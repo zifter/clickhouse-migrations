@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import re
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -18,6 +19,12 @@ def log_level(value: str) -> str:
     if value.upper() in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         return value.upper()
     else:
+        raise ValueError
+
+def cluster(value: str) -> str:
+    if re.match('[^"]+$', value): # Not sure on what the limitations on *quoted* identifiers are.
+        return value              # I think this should be sufficient (Not aginst sql injection and such
+    else:                         # this is *not* intended to protect aginst malicious input!).
         raise ValueError
 
 def cast_to_bool(value: str):
@@ -72,6 +79,12 @@ def get_context(args):
         type=log_level,
         help="Log level"
     )
+    parser.add_argument(
+        "--cluster",
+        default=os.environ.get("CLUSTER", None),
+        type=cluster,
+        help="Clickhouse topology cluster"
+    )
 
     return parser.parse_args(args)
 
@@ -85,7 +98,7 @@ def migrate(ctx) -> int:
         db_user=ctx.db_user,
         db_password=ctx.db_password,
     )
-    cluster.migrate(ctx.db_name, ctx.migrations_dir, ctx.multi_statement)
+    cluster.migrate(db_name=ctx.db_name, migration_path=ctx.migrations_dir, cluster=ctx.cluster, multi_statement=ctx.multi_statement)
     return 0
 
 

@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from clickhouse_driver import Client
 
@@ -38,10 +38,10 @@ class ClickhouseCluster:
         with self.connection("") as conn:
             conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
 
-    def init_schema(self, db_name):
+    def init_schema(self, db_name, cluster=None):
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
-            migrator.init_schema()
+            migrator.init_schema(cluster)
 
     def show_tables(self, db_name):
         with self.connection(db_name) as conn:
@@ -52,6 +52,7 @@ class ClickhouseCluster:
         self,
         db_name: str,
         migration_path: Path,
+        cluster: Optional[str] = None,
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
     ):
@@ -60,6 +61,7 @@ class ClickhouseCluster:
 
         return self.apply_migrations(
             db_name,
+            cluster,
             migrations,
             create_db_if_no_exists=create_db_if_no_exists,
             multi_statement=multi_statement,
@@ -68,6 +70,7 @@ class ClickhouseCluster:
     def apply_migrations(
         self,
         db_name: str,
+        cluster: Optional[str],
         migrations: List[Migration],
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
@@ -78,5 +81,5 @@ class ClickhouseCluster:
 
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
-            migrator.init_schema()
+            migrator.init_schema(cluster)
             return migrator.apply_migration(migrations, multi_statement)
