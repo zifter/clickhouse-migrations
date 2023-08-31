@@ -61,8 +61,8 @@ class ClickhouseCluster:
 
         return self.apply_migrations(
             db_name,
-            cluster,
             migrations,
+            cluster=cluster,
             create_db_if_no_exists=create_db_if_no_exists,
             multi_statement=multi_statement,
         )
