@@ -11,7 +11,7 @@ class Migrator:
     def __init__(self, conn: Client):
         self._conn: Client = conn
 
-    def init_schema(self, cluster: Optional[str]):
+    def init_schema(self, cluster: Optional[str] = None):
         cluster_schema = \
 f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER "{cluster}" (
     version UInt32,

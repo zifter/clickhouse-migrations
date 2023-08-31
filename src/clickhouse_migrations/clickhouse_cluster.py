@@ -70,8 +70,8 @@ class ClickhouseCluster:
     def apply_migrations(
         self,
         db_name: str,
-        cluster: Optional[str],
         migrations: List[Migration],
+        cluster: Optional[str] = None,
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
     ) -> List[Migration]:
