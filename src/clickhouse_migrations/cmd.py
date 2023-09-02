@@ -15,7 +15,7 @@ from clickhouse_migrations.defaults import (
 )
 
 def log_level(value: str) -> str:
-    if value.upper() in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+    if value.upper() in logging._nameToLevel.keys():
         return value.upper()
     else:
         raise ValueError
