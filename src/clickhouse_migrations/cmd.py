@@ -20,7 +20,7 @@ def log_level(value: str) -> str:
         # New api in python 3.11
         level_list = logging.getLevelNamesMapping().keys()  # pragma: no cover
     else:
-        level_list = logging._nameToLevel.keys()
+        level_list = logging._nameToLevel.keys()  # pylint: disable=W0212
 
     if value.upper() in level_list:
         return value.upper()
