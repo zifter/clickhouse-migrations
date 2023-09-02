@@ -16,7 +16,13 @@ from clickhouse_migrations.defaults import (
 
 
 def log_level(value: str) -> str:
-    if value.upper() in logging._nameToLevel.keys():
+    if hasattr(logging, "getLevelNamesMapping"):
+        # New api in python 3.11
+        level_list = logging.getLevelNamesMapping().keys()  # pragma: no cover
+    else:
+        level_list = logging._nameToLevel.keys()
+
+    if value.upper() in level_list:
         return value.upper()
     else:
         raise ValueError
