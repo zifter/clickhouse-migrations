@@ -71,7 +71,6 @@ class ClickhouseCluster:
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
     ) -> List[Migration]:
-
         if create_db_if_no_exists:
             self.create_db(db_name)
 

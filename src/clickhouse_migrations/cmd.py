@@ -14,11 +14,13 @@ from clickhouse_migrations.defaults import (
     MIGRATIONS_DIR,
 )
 
+
 def log_level(value: str) -> str:
     if value.upper() in logging._nameToLevel.keys():
         return value.upper()
     else:
         raise ValueError
+
 
 def cast_to_bool(value: str):
     return value.lower() in ("1", "true", "yes", "y")
@@ -70,14 +72,14 @@ def get_context(args):
         "--log-level",
         default=os.environ.get("LOG_LEVEL", "WARNING"),
         type=log_level,
-        help="Log level"
+        help="Log level",
     )
 
     return parser.parse_args(args)
 
 
 def migrate(ctx) -> int:
-    logging.basicConfig(level=ctx.log_level, style="{", format='{levelname}:{message}')
+    logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
 
     cluster = ClickhouseCluster(
         ctx.db_host,
