@@ -1,6 +1,6 @@
+import logging
 import os
 import sys
-import logging
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -24,8 +24,8 @@ def log_level(value: str) -> str:
 
     if value.upper() in level_list:
         return value.upper()
-    else:
-        raise ValueError
+
+    raise ValueError
 
 
 def cast_to_bool(value: str):
