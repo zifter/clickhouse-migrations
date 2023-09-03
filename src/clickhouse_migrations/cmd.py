@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from argparse import ArgumentParser
@@ -12,6 +13,19 @@ from clickhouse_migrations.defaults import (
     DB_USER,
     MIGRATIONS_DIR,
 )
+
+
+def log_level(value: str) -> str:
+    if hasattr(logging, "getLevelNamesMapping"):
+        # New api in python 3.11
+        level_list = logging.getLevelNamesMapping().keys()
+    else:
+        level_list = logging._nameToLevel.keys()  # pylint: disable=W0212
+
+    if value.upper() in level_list:
+        return value.upper()
+
+    raise ValueError
 
 
 def cast_to_bool(value: str):
@@ -60,11 +74,19 @@ def get_context(args):
         type=bool,
         help="Path to list of migration files",
     )
+    parser.add_argument(
+        "--log-level",
+        default=os.environ.get("LOG_LEVEL", "WARNING"),
+        type=log_level,
+        help="Log level",
+    )
 
     return parser.parse_args(args)
 
 
 def migrate(ctx) -> int:
+    logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
+
     cluster = ClickhouseCluster(
         ctx.db_host,
         db_port=ctx.db_port,

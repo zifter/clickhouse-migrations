@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 from typing import List
 
@@ -72,11 +71,8 @@ class ClickhouseCluster:
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
     ) -> List[Migration]:
-
         if create_db_if_no_exists:
             self.create_db(db_name)
-
-        logging.info("Total migrations to apply: %d", len(migrations))
 
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
