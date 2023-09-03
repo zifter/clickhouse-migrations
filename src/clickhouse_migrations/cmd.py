@@ -18,7 +18,7 @@ from clickhouse_migrations.defaults import (
 def log_level(value: str) -> str:
     if hasattr(logging, "getLevelNamesMapping"):
         # New api in python 3.11
-        level_list = logging.getLevelNamesMapping().keys()  # pragma: no cover
+        level_list = logging.getLevelNamesMapping().keys()
     else:
         level_list = logging._nameToLevel.keys()  # pylint: disable=W0212
 
