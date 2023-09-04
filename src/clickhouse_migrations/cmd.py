@@ -1,6 +1,5 @@
 import logging
 import os
-import re
 import sys
 from argparse import ArgumentParser
 from pathlib import Path
@@ -33,7 +32,7 @@ def cluster(value: str) -> str:
     # Not sure on what the limitations on *quoted* identifiers are.
     # I think this should be sufficient (Not aginst sql injection and such
     # this is *not* intended to protect aginst malicious input!).
-    if re.match('[^"]+$', value):
+    if '"' not in value:
         return value
     else:
         raise ValueError
