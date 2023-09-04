@@ -30,10 +30,14 @@ def log_level(value: str) -> str:
 
 
 def cluster(value: str) -> str:
-    if re.match('[^"]+$', value): # Not sure on what the limitations on *quoted* identifiers are.
-        return value              # I think this should be sufficient (Not aginst sql injection and such
-    else:                         # this is *not* intended to protect aginst malicious input!).
+    # Not sure on what the limitations on *quoted* identifiers are.
+    # I think this should be sufficient (Not aginst sql injection and such
+    # this is *not* intended to protect aginst malicious input!).
+    if re.match('[^"]+$', value):
+        return value
+    else:
         raise ValueError
+
 
 def cast_to_bool(value: str):
     return value.lower() in ("1", "true", "yes", "y")
@@ -91,7 +95,7 @@ def get_context(args):
         "--cluster",
         default=os.environ.get("CLUSTER", None),
         type=cluster,
-        help="Clickhouse topology cluster"
+        help="Clickhouse topology cluste",
     )
 
     return parser.parse_args(args)
@@ -106,7 +110,12 @@ def migrate(ctx) -> int:
         db_user=ctx.db_user,
         db_password=ctx.db_password,
     )
-    cluster.migrate(db_name=ctx.db_name, migration_path=ctx.migrations_dir, cluster=ctx.cluster, multi_statement=ctx.multi_statement)
+    cluster.migrate(
+        db_name=ctx.db_name,
+        migration_path=ctx.migrations_dir,
+        cluster=ctx.cluster,
+        multi_statement=ctx.multi_statement,
+    )
     return 0
 
 
