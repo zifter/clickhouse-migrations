@@ -1,7 +1,7 @@
-import os
-import sys
 import logging
+import os
 import re
+import sys
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -15,11 +15,19 @@ from clickhouse_migrations.defaults import (
     MIGRATIONS_DIR,
 )
 
+
 def log_level(value: str) -> str:
-    if value.upper() in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
-        return value.upper()
+    if hasattr(logging, "getLevelNamesMapping"):
+        # New api in python 3.11
+        level_list = logging.getLevelNamesMapping().keys()
     else:
-        raise ValueError
+        level_list = logging._nameToLevel.keys()  # pylint: disable=W0212
+
+    if value.upper() in level_list:
+        return value.upper()
+
+    raise ValueError
+
 
 def cluster(value: str) -> str:
     if re.match('[^"]+$', value): # Not sure on what the limitations on *quoted* identifiers are.
@@ -77,7 +85,7 @@ def get_context(args):
         "--log-level",
         default=os.environ.get("LOG_LEVEL", "WARNING"),
         type=log_level,
-        help="Log level"
+        help="Log level",
     )
     parser.add_argument(
         "--cluster",
@@ -90,7 +98,7 @@ def get_context(args):
 
 
 def migrate(ctx) -> int:
-    logging.basicConfig(level=ctx.log_level, style="{", format='{levelname}:{message}')
+    logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
 
     cluster = ClickhouseCluster(
         ctx.db_host,
