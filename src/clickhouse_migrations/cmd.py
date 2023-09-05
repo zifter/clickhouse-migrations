@@ -32,10 +32,10 @@ def cluster_name(value: str) -> str:
     # Not sure on what the limitations on *quoted* identifiers are.
     # I think this should be sufficient (Not aginst sql injection and such
     # this is *not* intended to protect aginst malicious input!).
-    if '"' not in value:
-        return value
-    else:
-        raise ValueError
+    if value:
+        return value.translate(str.maketrans({'"': r"\"", "\\": r"\\"}))
+
+    raise ValueError
 
 
 def cast_to_bool(value: str):
