@@ -12,12 +12,13 @@ def cluster():
 
 @pytest.fixture
 def schema(cluster):
-    migrator = Migrator(cluster.connection("pytest"))
-    migrator._execute("DROP DATABASE IF EXISTS pytest ON CLUSTER company_cluster")
-    migrator._execute("CREATE DATABASE pytest ON CLUSTER company_cluster")
+    conn = cluster.connection("pytest")
+    conn.execute("DROP DATABASE IF EXISTS pytest ON CLUSTER company_cluster")
+    conn.execute("CREATE DATABASE pytest ON CLUSTER company_cluster")
+    migrator = Migrator(conn)
     migrator.init_schema("company_cluster")
 
-    return migrator
+    return conn
 
 
 def test_cluster_validator():
@@ -70,7 +71,7 @@ def test_replicated_schema(schema):
         "clickhouse04",
     )
     for server in clickhouse_servers:
-        table_engine = schema._execute(
+        table_engine = schema.execute(
             f"select engine_full from remote('{server}', 'system.tables') where database = 'pytest' and name = 'schema_versions'"
         )[0][0]
         assert (
