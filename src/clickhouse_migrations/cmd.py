@@ -28,7 +28,7 @@ def log_level(value: str) -> str:
     raise ValueError
 
 
-def cluster(value: str) -> str:
+def cluster_name(value: str) -> str:
     # Not sure on what the limitations on *quoted* identifiers are.
     # I think this should be sufficient (Not aginst sql injection and such
     # this is *not* intended to protect aginst malicious input!).
@@ -91,10 +91,10 @@ def get_context(args):
         help="Log level",
     )
     parser.add_argument(
-        "--cluster",
-        default=os.environ.get("CLUSTER", None),
-        type=cluster,
-        help="Clickhouse topology cluste",
+        "--cluster-name",
+        default=os.environ.get("CLUSTER_NAME", None),
+        type=cluster_name,
+        help="Clickhouse topology cluster",
     )
 
     return parser.parse_args(args)
@@ -112,7 +112,7 @@ def migrate(ctx) -> int:
     cluster.migrate(
         db_name=ctx.db_name,
         migration_path=ctx.migrations_dir,
-        cluster=ctx.cluster,
+        cluster_name=ctx.cluster_name,
         multi_statement=ctx.multi_statement,
     )
     return 0

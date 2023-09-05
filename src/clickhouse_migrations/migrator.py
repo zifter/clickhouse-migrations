@@ -11,8 +11,8 @@ class Migrator:
     def __init__(self, conn: Client):
         self._conn: Client = conn
 
-    def init_schema(self, cluster: Optional[str] = None):
-        cluster_schema = f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER "{cluster}" (
+    def init_schema(self, cluster_name: Optional[str] = None):
+        cluster_schema = f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER "{cluster_name}" (
     version UInt32,
     md5 String,
     script String,
@@ -27,7 +27,7 @@ ORDER BY tuple(created_at)"""
     created_at DateTime DEFAULT now()
 ) ENGINE = MergeTree ORDER BY tuple(created_at)"""
 
-        self._execute(single_schema if cluster is None else cluster_schema)
+        self._execute(single_schema if cluster_name is None else cluster_schema)
 
     def query_applied_migrations(self) -> List[Migration]:
         query = """SELECT

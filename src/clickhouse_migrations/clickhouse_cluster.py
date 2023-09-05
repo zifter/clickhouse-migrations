@@ -37,10 +37,10 @@ class ClickhouseCluster:
         with self.connection("") as conn:
             conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
 
-    def init_schema(self, db_name, cluster=None):
+    def init_schema(self, db_name, cluster_name=None):
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
-            migrator.init_schema(cluster)
+            migrator.init_schema(cluster_name)
 
     def show_tables(self, db_name):
         with self.connection(db_name) as conn:
@@ -51,7 +51,7 @@ class ClickhouseCluster:
         self,
         db_name: str,
         migration_path: Path,
-        cluster: Optional[str] = None,
+        cluster_name: Optional[str] = None,
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
     ):
@@ -61,7 +61,7 @@ class ClickhouseCluster:
         return self.apply_migrations(
             db_name,
             migrations,
-            cluster=cluster,
+            cluster_name=cluster_name,
             create_db_if_no_exists=create_db_if_no_exists,
             multi_statement=multi_statement,
         )
@@ -70,7 +70,7 @@ class ClickhouseCluster:
         self,
         db_name: str,
         migrations: List[Migration],
-        cluster: Optional[str] = None,
+        cluster_name: Optional[str] = None,
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
     ) -> List[Migration]:
@@ -79,5 +79,5 @@ class ClickhouseCluster:
 
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
-            migrator.init_schema(cluster)
+            migrator.init_schema(cluster_name)
             return migrator.apply_migration(migrations, multi_statement)
