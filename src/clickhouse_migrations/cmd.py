@@ -28,16 +28,6 @@ def log_level(value: str) -> str:
     raise ValueError
 
 
-def cluster_name(value: str) -> str:
-    # Not sure on what the limitations on *quoted* identifiers are.
-    # I think this should be sufficient (Not aginst sql injection and such
-    # this is *not* intended to protect aginst malicious input!).
-    if value:
-        return value.translate(str.maketrans({'"': r"\"", "\\": r"\\"}))
-
-    raise ValueError
-
-
 def cast_to_bool(value: str):
     return value.lower() in ("1", "true", "yes", "y")
 
@@ -93,7 +83,6 @@ def get_context(args):
     parser.add_argument(
         "--cluster-name",
         default=os.environ.get("CLUSTER_NAME", None),
-        type=cluster_name,
         help="Clickhouse topology cluster",
     )
 
