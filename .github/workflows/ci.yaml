@@ -24,9 +24,7 @@ jobs:
 #          - Windows
 #          - MacOs
         py:
-# https://github.com/PyCQA/pylint/issues/6535
-# waiting for fix ^
-#          - "3.11"
+          - "3.11"
           - "3.10"
           - "3.9"
           - "3.8"
