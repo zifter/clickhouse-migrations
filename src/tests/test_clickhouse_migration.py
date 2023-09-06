@@ -4,28 +4,11 @@ from pathlib import Path
 import pytest
 from clickhouse_driver.errors import ServerException
 
-from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.cmd import get_context, migrate
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.types import Migration
 
 TESTS_DIR = Path(__file__).parent
-
-
-@pytest.fixture
-def cluster():
-    return ClickhouseCluster("localhost", "default", "")
-
-
-@pytest.fixture(autouse=True)
-def before(cluster):
-    clean_slate(cluster)
-
-
-def clean_slate(migrator):
-    with migrator.connection("") as conn:
-        conn.execute("DROP DATABASE IF EXISTS pytest")
-        conn.execute("CREATE DATABASE pytest")
 
 
 def test_empty_list_of_migrations_ok(cluster):
