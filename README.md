@@ -15,6 +15,7 @@ Holding off the scripts to migrate these will be painful.
 * Supports multi statements - more than one query per migration file.
 * Allow running migrations out-of-box
 * Simple file migrations format: {VERSION}_{name}.sql
+* Supports Cluster deployments, makes sure that migrations state is consistent on all cluster nodes
 
 ## Known alternatives
 This package originally forked from [clickhouse-migrator](https://github.com/delium/clickhouse-migrator).
@@ -45,7 +46,7 @@ clickhouse-migrations --db-host localhost \
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 
 cluster = ClickhouseCluster(db_host, db_user, db_password)
-cluster.migrate(db_name, migrations_home, create_db_if_no_exists=True, multi_statement=True)
+cluster.migrate(db_name, migrations_home, cluster_name=None,create_db_if_no_exists=True, multi_statement=True)
 ```
 
 Parameter | Description                                                       | Default
@@ -56,6 +57,7 @@ db_user | Clickhouse user                                                   | de
 db_password | Clichouse password                                                | default
 db_name| Clickhouse database name                                          | None
 migrations_home | Path to list of migration files                                   | <project_root>
+cluster_name | Name of Clickhouse topology cluster from <remote_servers>            | None
 create_db_if_no_exists | If the `db_name` is not present, enabling this will create the db | True
 multi_statement | Allow multiple statements in migration files                      | True
 
@@ -65,4 +67,3 @@ To allow for multiple statements in a single migration, you can use the multi_st
 There are two important caveats:
 * This mode splits the migration text into separately-executed statements by a semi-colon ;. Thus cannot be used when a statement in the migration contains a string with a semi-colon.
 * The queries are not executed in any sort of transaction/batch, meaning you are responsible for fixing partial migrations.
-
