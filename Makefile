@@ -1,17 +1,16 @@
 .PHONY: setup
 setup:
-	pip install tox
+	python3 -m pip install tox==4.8.0
 
 .PHONY: setup-dev
 setup-dev:
-	pyenv install -s 3.6.15
 	pyenv install -s 3.7.12
 	pyenv install -s 3.8.6
 	pyenv install -s 3.9.9
-	pyenv install -s 3.10.0
-	pyenv local 3.6.15 3.7.12 3.8.6 3.9.9 3.10.0
-	pip install tox-pyenv
-	python3 -m pip install tox
+	pyenv install -s 3.10.7
+	pyenv install -s 3.11.0
+	pyenv local 3.7.12 3.8.6 3.9.9 3.10.7 3.11.0
+	python3 -m pip install tox==4.8.0
 
 .PHONY: test
 test:
