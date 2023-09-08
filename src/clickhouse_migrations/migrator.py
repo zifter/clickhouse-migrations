@@ -17,7 +17,7 @@ class Migrator:
     md5 String,
     script String,
     created_at DateTime DEFAULT now()
-) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{database}}/schema_versions', '{{replica}}')
+) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{database}}/{{table}}', '{{replica}}')
 ORDER BY tuple(created_at)"""
 
         single_schema = """CREATE TABLE IF NOT EXISTS schema_versions (
