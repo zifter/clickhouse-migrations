@@ -33,9 +33,14 @@ class ClickhouseCluster:
             **self.connection_kwargs,
         )
 
-    def create_db(self, db_name):
+    def create_db(self, db_name, cluster_name=None):
         with self.connection("") as conn:
-            conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+            if cluster_name is None:
+                conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+            else:
+                conn.execute(
+                    f"CREATE DATABASE IF NOT EXISTS {db_name} ON CLUSTER {cluster_name}"
+                )
 
     def init_schema(self, db_name, cluster_name=None):
         with self.connection(db_name) as conn:
@@ -75,7 +80,10 @@ class ClickhouseCluster:
         multi_statement: bool = True,
     ) -> List[Migration]:
         if create_db_if_no_exists:
-            self.create_db(db_name)
+            if cluster_name is None:
+                self.create_db(db_name)
+            else:
+                self.create_db(db_name, cluster_name)
 
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
