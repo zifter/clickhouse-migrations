@@ -41,11 +41,11 @@ def test_replicated_schema(_schema):
     with _schema:
         for server in CLICKHOUSE_SERVERS:
             table_engine = _schema.execute(
-                f"select engine_full from remote('{server}', 'system.tables') where database = 'pytest' and name = 'schema_versions'"
+                f"select engine_full from remote('{server}', 'system.tables') where database = 'pytest' and name = 'schema_versions'"  # pylint: disable=C0301 # noqa: E501
             )[0][0]
             assert (
                 table_engine
-                == "ReplicatedMergeTree('/clickhouse/tables/{database}/{table}', '{replica}') ORDER BY tuple(created_at) SETTINGS index_granularity = 8192"
+                == "ReplicatedMergeTree('/clickhouse/tables/{database}/{table}', '{replica}') ORDER BY tuple(created_at) SETTINGS index_granularity = 8192"  # pylint: disable=C0301 # noqa: E501
             )
 
 
