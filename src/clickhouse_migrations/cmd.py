@@ -80,6 +80,11 @@ def get_context(args):
         type=log_level,
         help="Log level",
     )
+    parser.add_argument(
+        "--cluster-name",
+        default=os.environ.get("CLUSTER_NAME", None),
+        help="Clickhouse topology cluster",
+    )
 
     return parser.parse_args(args)
 
@@ -93,7 +98,12 @@ def migrate(ctx) -> int:
         db_user=ctx.db_user,
         db_password=ctx.db_password,
     )
-    cluster.migrate(ctx.db_name, ctx.migrations_dir, ctx.multi_statement)
+    cluster.migrate(
+        db_name=ctx.db_name,
+        migration_path=ctx.migrations_dir,
+        cluster_name=ctx.cluster_name,
+        multi_statement=ctx.multi_statement,
+    )
     return 0
 
 
