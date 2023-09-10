@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 from typing import List, Optional
 
@@ -34,14 +33,19 @@ class ClickhouseCluster:
             **self.connection_kwargs,
         )
 
-    def create_db(self, db_name):
+    def create_db(self, db_name, cluster_name=None):
         with self.connection("") as conn:
-            conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+            if cluster_name is None:
+                conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+            else:
+                conn.execute(
+                    f"CREATE DATABASE IF NOT EXISTS {db_name} ON CLUSTER {cluster_name}"
+                )
 
-    def init_schema(self, db_name, cluster=None):
+    def init_schema(self, db_name, cluster_name=None):
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
-            migrator.init_schema(cluster)
+            migrator.init_schema(cluster_name)
 
     def show_tables(self, db_name):
         with self.connection(db_name) as conn:
@@ -52,7 +56,7 @@ class ClickhouseCluster:
         self,
         db_name: str,
         migration_path: Path,
-        cluster: Optional[str] = None,
+        cluster_name: Optional[str] = None,
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
         dryrun: bool = False
@@ -62,8 +66,8 @@ class ClickhouseCluster:
 
         return self.apply_migrations(
             db_name,
-            cluster,
             migrations,
+            cluster_name=cluster_name,
             create_db_if_no_exists=create_db_if_no_exists,
             multi_statement=multi_statement,
             dryrun=dryrun
@@ -72,17 +76,19 @@ class ClickhouseCluster:
     def apply_migrations(
         self,
         db_name: str,
-        cluster: Optional[str],
         migrations: List[Migration],
         dryrun: bool = False,
+        cluster_name: Optional[str] = None,
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
     ) -> List[Migration]:
-
         if create_db_if_no_exists:
-            self.create_db(db_name)
+            if cluster_name is None:
+                self.create_db(db_name)
+            else:
+                self.create_db(db_name, cluster_name)
 
         with self.connection(db_name) as conn:
             migrator = Migrator(conn, dryrun)
-            migrator.init_schema(cluster)
+            migrator.init_schema(cluster_name)
             return migrator.apply_migration(migrations, multi_statement)

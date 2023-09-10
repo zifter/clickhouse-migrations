@@ -6,6 +6,7 @@
             <use_uncompressed_cache>0</use_uncompressed_cache>
             <load_balancing>in_order</load_balancing>
             <log_queries>1</log_queries>
+            <insert_quorum>4</insert_quorum>
         </default>
     </profiles>
 
