@@ -89,13 +89,7 @@ def get_context(args):
         "--dry-run",
         default=os.environ.get("DRY_RUN", "0"),
         type=bool,
-        help="Dry run mode"
-    )
-    parser.add_argument(
-        "--dry-run",
-        default=os.environ.get("DRY_RUN", "0"),
-        type=bool,
-        help="Dry run mode"
+        help="Dry run mode",
     )
 
     return parser.parse_args(args)
