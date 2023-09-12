@@ -85,6 +85,12 @@ def get_context(args):
         default=os.environ.get("CLUSTER_NAME", None),
         help="Clickhouse topology cluster",
     )
+    parser.add_argument(
+        "--dry-run",
+        default=os.environ.get("DRY_RUN", "0"),
+        type=bool,
+        help="Dry run mode",
+    )
 
     return parser.parse_args(args)
 
@@ -103,6 +109,7 @@ def migrate(ctx) -> int:
         migration_path=ctx.migrations_dir,
         cluster_name=ctx.cluster_name,
         multi_statement=ctx.multi_statement,
+        dryrun=ctx.dry_run,
     )
     return 0
 

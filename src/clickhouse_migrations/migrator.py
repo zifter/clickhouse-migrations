@@ -8,8 +8,9 @@ from clickhouse_migrations.types import Migration
 
 
 class Migrator:
-    def __init__(self, conn: Client):
+    def __init__(self, conn: Client, dryrun: bool = False):
         self._conn: Client = conn
+        self._dryrun = dryrun
 
     def init_schema(self, cluster_name: Optional[str] = None):
         cluster_schema = f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER "{cluster_name}" (
@@ -105,20 +106,23 @@ ORDER BY tuple(created_at)"""
 
             logging.info("Migration contains %s statements to apply", len(statements))
             for statement in statements:
-                self._execute(statement)
+                if not self._dryrun:
+                    self._execute(statement)
+                else:
+                    logging.info("Dry run mode, would have executed: %s", statement)
 
             logging.info("Migration applied, need to update schema version table.")
-
-            self._execute(
-                "INSERT INTO schema_versions(version, script, md5) VALUES",
-                [
-                    {
-                        "version": migration.version,
-                        "script": migration.script,
-                        "md5": migration.md5,
-                    }
-                ],
-            )
+            if not self._dryrun:
+                self._execute(
+                    "INSERT INTO schema_versions(version, script, md5) VALUES",
+                    [
+                        {
+                            "version": migration.version,
+                            "script": migration.script,
+                            "md5": migration.md5,
+                        }
+                    ],
+                )
 
             logging.info("Migration is fully applied.")
 
