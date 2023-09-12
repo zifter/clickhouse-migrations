@@ -59,7 +59,7 @@ class ClickhouseCluster:
         cluster_name: Optional[str] = None,
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
-        dryrun: bool = False
+        dryrun: bool = False,
     ):
         storage = MigrationStorage(migration_path)
         migrations = storage.migrations()
@@ -70,7 +70,7 @@ class ClickhouseCluster:
             cluster_name=cluster_name,
             create_db_if_no_exists=create_db_if_no_exists,
             multi_statement=multi_statement,
-            dryrun=dryrun
+            dryrun=dryrun,
         )
 
     def apply_migrations(
