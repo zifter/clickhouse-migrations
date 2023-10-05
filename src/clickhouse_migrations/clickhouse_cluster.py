@@ -36,10 +36,10 @@ class ClickhouseCluster:
     def create_db(self, db_name, cluster_name=None):
         with self.connection("") as conn:
             if cluster_name is None:
-                conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+                conn.execute(f'CREATE DATABASE IF NOT EXISTS "{db_name}"')
             else:
                 conn.execute(
-                    f"CREATE DATABASE IF NOT EXISTS {db_name} ON CLUSTER {cluster_name}"
+                    f'CREATE DATABASE IF NOT EXISTS "{db_name}" ON CLUSTER "{cluster_name}"'
                 )
 
     def init_schema(self, db_name, cluster_name=None):
