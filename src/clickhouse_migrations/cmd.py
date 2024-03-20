@@ -91,6 +91,12 @@ def get_context(args):
         type=bool,
         help="Dry run mode",
     )
+    parser.add_argument(
+        "--secure",
+        default=os.environ.get("SECURE", "1"),
+        type=bool,
+        help="Secure connection",
+    )
 
     return parser.parse_args(args)
 
@@ -103,6 +109,7 @@ def migrate(ctx) -> int:
         db_port=ctx.db_port,
         db_user=ctx.db_user,
         db_password=ctx.db_password,
+        secure=ctx.secure,
     )
     cluster.migrate(
         db_name=ctx.db_name,
