@@ -93,7 +93,7 @@ def get_context(args):
     )
     parser.add_argument(
         "--secure",
-        default=os.environ.get("SECURE", "1"),
+        default=os.environ.get("SECURE", "0"),
         type=bool,
         help="Secure connection",
     )
