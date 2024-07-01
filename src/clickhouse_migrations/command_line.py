@@ -7,7 +7,6 @@ from pathlib import Path
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.defaults import (
     DB_HOST,
-    DB_NAME,
     DB_PASSWORD,
     DB_PORT,
     DB_USER,
