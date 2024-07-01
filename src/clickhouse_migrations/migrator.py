@@ -90,7 +90,10 @@ ORDER BY tuple(created_at)"""
         return sorted(to_apply, key=lambda x: x.version)
 
     def apply_migration(
-        self, migrations: List[Migration], multi_statement: bool
+        self,
+        migrations: List[Migration],
+        multi_statement: bool,
+        fake: bool = False,
     ) -> List[Migration]:
         new_migrations = self.migrations_to_apply(migrations)
 
@@ -106,10 +109,14 @@ ORDER BY tuple(created_at)"""
 
             logging.info("Migration contains %s statements to apply", len(statements))
             for statement in statements:
-                if not self._dryrun:
-                    self._execute(statement)
-                else:
+                if fake:
+                    logging.warning(
+                        "Fake mode, statement will be skipped: %s", statement
+                    )
+                elif self._dryrun:
                     logging.info("Dry run mode, would have executed: %s", statement)
+                else:
+                    self._execute(statement)
 
             logging.info("Migration applied, need to update schema version table.")
             if not self._dryrun:

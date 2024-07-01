@@ -7,7 +7,6 @@ from pathlib import Path
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.defaults import (
     DB_HOST,
-    DB_NAME,
     DB_PASSWORD,
     DB_PORT,
     DB_USER,
@@ -64,7 +63,7 @@ def get_context(args):
     )
     parser.add_argument(
         "--db-name",
-        default=os.environ.get("DB_NAME", DB_NAME),
+        default=os.environ.get("DB_NAME", None),
         help="Clickhouse database name",
     )
     parser.add_argument(
@@ -97,6 +96,20 @@ def get_context(args):
         help="Dry run mode",
     )
     parser.add_argument(
+        "--fake",
+        default=os.environ.get("FAKE", "0"),
+        type=bool,
+        help="Marks the migrations up to the target one (following the rules above) as applied, "
+        "but without actually running the SQL to change your database schema.",
+    )
+    parser.add_argument(
+        "--migrations",
+        default=os.environ.get("MIGRATIONS", "").split(","),
+        type=str,
+        nargs="+",
+        help="Dry run mode",
+    )
+    parser.add_argument(
         "--secure",
         default=os.environ.get("SECURE", "0"),
         type=bool,
@@ -120,9 +133,11 @@ def migrate(ctx) -> int:
     cluster.migrate(
         db_name=ctx.db_name,
         migration_path=ctx.migrations_dir,
+        explicit_migrations=ctx.migrations,
         cluster_name=ctx.cluster_name,
         multi_statement=ctx.multi_statement,
         dryrun=ctx.dry_run,
+        fake=ctx.fake,
     )
     return 0
 

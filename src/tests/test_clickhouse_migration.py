@@ -159,6 +159,19 @@ def test_main_pass_db_name_ok():
     )
 
 
+def test_main_pass_db_url_ok():
+    migrate(
+        get_context(
+            [
+                "--db-url",
+                "clickhouse://default:@localhost:9000/pytest",
+                "--migrations-dir",
+                str(TESTS_DIR / "migrations"),
+            ]
+        )
+    )
+
+
 def test_check_multistatement_arg():
     context = get_context(["--multi-statement", "false"])
     assert context.multi_statement is False
@@ -168,3 +181,28 @@ def test_check_multistatement_arg():
 
     context = get_context(["--multi-statement", "0"])
     assert context.multi_statement is False
+
+
+def test_check_explicit_migrations_ok():
+    migrate(
+        get_context(
+            [
+                "--migrations",
+                "001_init",
+                "002",
+                "3",
+                "--migrations-dir",
+                str(TESTS_DIR / "complex_migrations"),
+            ]
+        )
+    )
+
+
+def test_check_explicit_migrations_args_ok():
+    context = get_context(["--migrations", "001_init", "002_test2"])
+    assert context.migrations == ["001_init", "002_test2"]
+
+
+def test_check_fake_ok():
+    context = get_context(["--fake"])
+    assert context.fake is True
