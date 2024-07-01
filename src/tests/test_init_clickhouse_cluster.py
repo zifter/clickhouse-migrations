@@ -15,12 +15,6 @@ def cluster():
     return ClickhouseCluster(db_url=DB_URL)
 
 
-@pytest.fixture(name="_clean_slate")
-def clean_slate(cluster):
-    with cluster.connection("") as conn:
-        conn.execute("DROP DATABASE IF EXISTS pytest ON CLUSTER company_cluster")
-
-
 def test_apply_new_migration_ok(cluster):
     cluster.init_schema("pytest")
 

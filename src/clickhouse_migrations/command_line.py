@@ -11,7 +11,7 @@ from clickhouse_migrations.defaults import (
     DB_PASSWORD,
     DB_PORT,
     DB_USER,
-    MIGRATIONS_DIR, DB_URL,
+    MIGRATIONS_DIR,
 )
 
 
