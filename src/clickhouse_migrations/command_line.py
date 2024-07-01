@@ -7,7 +7,6 @@ from pathlib import Path
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.defaults import (
     DB_HOST,
-    DB_NAME,
     DB_PASSWORD,
     DB_PORT,
     DB_USER,
@@ -64,7 +63,7 @@ def get_context(args):
     )
     parser.add_argument(
         "--db-name",
-        default=os.environ.get("DB_NAME", DB_NAME),
+        default=os.environ.get("DB_NAME", None),
         help="Clickhouse database name",
     )
     parser.add_argument(

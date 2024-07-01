@@ -159,6 +159,19 @@ def test_main_pass_db_name_ok():
     )
 
 
+def test_main_pass_db_url_ok():
+    migrate(
+        get_context(
+            [
+                "--db-url",
+                "clickhouse://default:@localhost:9000/pytest",
+                "--migrations-dir",
+                str(TESTS_DIR / "migrations"),
+            ]
+        )
+    )
+
+
 def test_check_multistatement_arg():
     context = get_context(["--multi-statement", "false"])
     assert context.multi_statement is False

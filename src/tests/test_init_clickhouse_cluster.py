@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
-from clickhouse_migrations.defaults import DB_URL
 from clickhouse_migrations.migration import Migration, MigrationStorage
 
 TESTS_DIR = Path(__file__).parent
@@ -12,13 +11,13 @@ MIGRATIONS = MigrationStorage(TESTS_DIR / "migrations").migrations()
 
 @pytest.fixture
 def cluster():
-    return ClickhouseCluster(db_url=DB_URL)
+    return ClickhouseCluster(db_url="clickhouse://default:@localhost:9000/pytest")
 
 
 def test_apply_new_migration_ok(cluster):
-    cluster.init_schema("pytest")
+    cluster.init_schema()
 
-    with cluster.connection("pytest") as conn:
+    with cluster.connection() as conn:
         conn.execute(
             "INSERT INTO schema_versions(version, script, md5) VALUES",
             [{"version": 1, "script": "SHOW TABLES", "md5": "12345"}],
