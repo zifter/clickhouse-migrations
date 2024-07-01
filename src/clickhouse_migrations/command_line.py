@@ -64,7 +64,7 @@ def get_context(args):
     )
     parser.add_argument(
         "--db-name",
-        default=os.environ.get("DB_NAME", DB_NAME),
+        default=os.environ.get("DB_NAME", None),
         help="Clickhouse database name",
     )
     parser.add_argument(
@@ -118,7 +118,7 @@ def migrate(ctx) -> int:
         secure=ctx.secure,
     )
     cluster.migrate(
-        db_name=ctx.db_name,
+        db_name=ctx.default_db_name,
         migration_path=ctx.migrations_dir,
         cluster_name=ctx.cluster_name,
         multi_statement=ctx.multi_statement,
