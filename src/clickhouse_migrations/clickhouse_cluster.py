@@ -4,8 +4,8 @@ from typing import List, Optional
 from clickhouse_driver import Client
 
 from clickhouse_migrations.defaults import DB_HOST, DB_PASSWORD, DB_PORT, DB_USER
+from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import Migrator
-from clickhouse_migrations.types import Migration, MigrationStorage
 
 
 class ClickhouseCluster:
@@ -15,23 +15,39 @@ class ClickhouseCluster:
         db_user: str = DB_USER,
         db_password: str = DB_PASSWORD,
         db_port: str = DB_PORT,
+        db_url: Optional[str] = None,
         **kwargs,
     ):
-        self.db_host = db_host
-        self.db_port = db_port
-        self.db_user = db_user
-        self.db_password = db_password
-        self.connection_kwargs = kwargs
+        self.db_url: Optional[str] = db_url
+        if db_url:
+            parts = self.db_url.split("/")
+            if len(parts) == 4:
+                parts = parts[0:-1]
+
+            self.db_url = "/".join(parts)
+        else:
+            self.db_host = db_host
+            self.db_port = db_port
+            self.db_user = db_user
+            self.db_password = db_password
+            self.connection_kwargs = kwargs
 
     def connection(self, db_name: str) -> Client:
-        return Client(
-            self.db_host,
-            port=self.db_port,
-            user=self.db_user,
-            password=self.db_password,
-            database=db_name,
-            **self.connection_kwargs,
-        )
+        if self.db_url:
+            db_url = self.db_url
+            if db_name:
+                db_url = db_url + "/" + db_name
+            ch_client = Client.from_url(db_url)
+        else:
+            ch_client = Client(
+                self.db_host,
+                port=self.db_port,
+                user=self.db_user,
+                password=self.db_password,
+                database=db_name,
+                **self.connection_kwargs,
+            )
+        return ch_client
 
     def create_db(self, db_name, cluster_name=None):
         with self.connection("") as conn:

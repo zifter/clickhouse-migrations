@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 from clickhouse_driver.errors import ServerException
 
-from clickhouse_migrations.cmd import get_context, migrate
+from clickhouse_migrations.command_line import get_context, migrate
 from clickhouse_migrations.exceptions import MigrationException
-from clickhouse_migrations.types import Migration
+from clickhouse_migrations.migration import Migration
 
 TESTS_DIR = Path(__file__).parent
 

@@ -18,6 +18,7 @@ services:
 
   clickhouse01:
     image: yandex/clickhouse-server:20.4
+    # image: altinity/clickhouse-server:23.8.11.29.altinitystable
     container_name: clickhouse01
     hostname: clickhouse01
     networks:
@@ -33,6 +34,7 @@ services:
 
   clickhouse02:
     image: yandex/clickhouse-server:20.4
+    # image: altinity/clickhouse-server:23.8.11.29.altinitystable
     container_name: clickhouse02
     hostname: clickhouse02
     networks:
@@ -45,6 +47,7 @@ services:
 
   clickhouse03:
     image: yandex/clickhouse-server:20.4
+    # image: altinity/clickhouse-server:23.8.11.29.altinitystable
     container_name: clickhouse03
     hostname: clickhouse03
     networks:
@@ -57,6 +60,7 @@ services:
 
   clickhouse04:
     image: yandex/clickhouse-server:20.4
+    # image: altinity/clickhouse-server:23.8.11.29.altinitystable
     container_name: clickhouse04
     hostname: clickhouse04
     networks:

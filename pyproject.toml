@@ -57,4 +57,4 @@ profile = "black"
 source = "vcs"
 
 [project.scripts]
-clickhouse-migrations = "clickhouse_migrations.cmd:main"
+clickhouse-migrations = "clickhouse_migrations.command_line:main"

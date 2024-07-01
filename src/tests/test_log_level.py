@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from clickhouse_migrations.cmd import log_level
+from clickhouse_migrations.command_line import log_level
 
 
 @pytest.mark.parametrize(

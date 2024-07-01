@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 from clickhouse_driver import Client
 
 from clickhouse_migrations.exceptions import MigrationException
-from clickhouse_migrations.types import Migration
+from clickhouse_migrations.migration import Migration
 
 
 class Migrator:

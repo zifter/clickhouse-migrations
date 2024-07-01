@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
-from clickhouse_migrations.types import MigrationStorage
+from clickhouse_migrations.migration import MigrationStorage
 
 TESTS_DIR = Path(__file__).parent
 MIGRATIONS = MigrationStorage(TESTS_DIR / "migrations").migrations()
@@ -12,7 +12,7 @@ MIGRATIONS = MigrationStorage(TESTS_DIR / "migrations").migrations()
 
 @pytest.fixture
 def cluster():
-    return ClickhouseCluster("localhost", "default", "")
+    return ClickhouseCluster(db_host="localhost", db_user="default", db_password="")
 
 
 @pytest.fixture(name="_clean_slate")
