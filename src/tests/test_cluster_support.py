@@ -17,7 +17,7 @@ CLICKHOUSE_SERVERS = (
 
 @pytest.fixture
 def cluster():
-    return ClickhouseCluster("localhost", "default", "")
+    return ClickhouseCluster(db_host="localhost", db_user="default", db_password="")
 
 
 @pytest.fixture(name="_clean_slate")
@@ -62,7 +62,7 @@ def test_distributed_database_create(cluster, _clean_slate):
 
 
 def test_migration_with_replicated_schema(_schema):
-    cluster = ClickhouseCluster("localhost", "default", "")
+    cluster = ClickhouseCluster(db_host="localhost", db_user="default", db_password="")
     result_set = []
 
     cluster.migrate("pytest", TESTS_DIR / "migrations", "company_cluster")

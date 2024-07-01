@@ -38,6 +38,11 @@ def get_context(args):
 
     # detect configuration
     parser.add_argument(
+        "--db-url",
+        default=os.environ.get("DB_URL", None),
+        help="Clickhouse database hostname",
+    )
+    parser.add_argument(
         "--db-host",
         default=os.environ.get("DB_HOST", DB_HOST),
         help="Clickhouse database hostname",
@@ -105,10 +110,11 @@ def migrate(ctx) -> int:
     logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
 
     cluster = ClickhouseCluster(
-        ctx.db_host,
+        db_host=ctx.db_host,
         db_port=ctx.db_port,
         db_user=ctx.db_user,
         db_password=ctx.db_password,
+        db_url=ctx.db_url,
         secure=ctx.secure,
     )
     cluster.migrate(
