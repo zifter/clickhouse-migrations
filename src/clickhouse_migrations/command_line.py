@@ -118,7 +118,7 @@ def migrate(ctx) -> int:
         secure=ctx.secure,
     )
     cluster.migrate(
-        db_name=ctx.default_db_name,
+        db_name=ctx.db_name,
         migration_path=ctx.migrations_dir,
         cluster_name=ctx.cluster_name,
         multi_statement=ctx.multi_statement,

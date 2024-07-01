@@ -37,7 +37,7 @@ class ClickhouseCluster:
             self.connection_kwargs = kwargs
 
     def connection(self, db_name: Optional[str] = None) -> Client:
-        db_name = db_name if db_name else self.default_db_name
+        db_name = db_name if db_name is not None else self.default_db_name
 
         if self.db_url:
             db_url = self.db_url
@@ -58,7 +58,7 @@ class ClickhouseCluster:
     def create_db(
         self, db_name: Optional[str] = None, cluster_name: Optional[str] = None
     ):
-        db_name = db_name if db_name else self.default_db_name
+        db_name = db_name if db_name is not None else self.default_db_name
 
         with self.connection("") as conn:
             if cluster_name is None:
@@ -71,14 +71,14 @@ class ClickhouseCluster:
     def init_schema(
         self, db_name: Optional[str] = None, cluster_name: Optional[str] = None
     ):
-        db_name = db_name if db_name else self.default_db_name
+        db_name = db_name if db_name is not None else self.default_db_name
 
         with self.connection(db_name) as conn:
             migrator = Migrator(conn)
             migrator.init_schema(cluster_name)
 
     def show_tables(self, db_name):
-        db_name = db_name if db_name else self.default_db_name
+        db_name = db_name if db_name is not None else self.default_db_name
 
         with self.connection(db_name) as conn:
             result = conn.execute("show tables")
@@ -93,7 +93,7 @@ class ClickhouseCluster:
         multi_statement: bool = True,
         dryrun: bool = False,
     ):
-        db_name = db_name if db_name else self.default_db_name
+        db_name = db_name if db_name is not None else self.default_db_name
 
         storage = MigrationStorage(migration_path)
         migrations = storage.migrations()
