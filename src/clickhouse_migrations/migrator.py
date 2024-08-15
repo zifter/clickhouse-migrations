@@ -95,14 +95,16 @@ ORDER BY tuple(created_at)"""
         multi_statement: bool,
         fake: bool = False,
     ) -> List[Migration]:
-        new_migrations = self.migrations_to_apply(migrations)
+        migrations_to_process = (
+            migrations if fake else self.migrations_to_apply(migrations)
+        )
 
-        logging.info("Total migrations to apply: %d", len(new_migrations))
+        logging.info("Total migrations to apply: %d", len(migrations_to_process))
 
-        if not new_migrations:
+        if not migrations_to_process:
             return []
 
-        for migration in new_migrations:
+        for migration in migrations_to_process:
             logging.info("Execute migration %s", migration)
 
             statements = self.script_to_statements(migration.script, multi_statement)
@@ -133,7 +135,7 @@ ORDER BY tuple(created_at)"""
 
             logging.info("Migration is fully applied.")
 
-        return new_migrations
+        return migrations_to_process
 
     def _execute(self, statement, *args, **kwargs):
         logging.debug(statement)
