@@ -4,7 +4,7 @@ from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 
 
 @pytest.fixture
-def cluster():
+def cluster() -> ClickhouseCluster:
     return ClickhouseCluster(db_host="localhost", db_user="default", db_password="")
 
 

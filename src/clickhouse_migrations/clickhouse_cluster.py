@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from clickhouse_driver import Client
 
@@ -87,12 +87,12 @@ class ClickhouseCluster:
     def migrate(
         self,
         db_name: Optional[str],
-        migration_path: Path,
-        explicit_migrations: Optional[List[str]] = None,
+        migration_path: Union[Path, str],
         cluster_name: Optional[str] = None,
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
         dryrun: bool = False,
+        explicit_migrations: Optional[List[str]] = None,
         fake: bool = False,
     ):
         db_name = db_name if db_name is not None else self.default_db_name

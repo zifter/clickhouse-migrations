@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from clickhouse_driver.errors import ServerException
 
+from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.command_line import get_context, migrate
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
@@ -11,14 +12,14 @@ from clickhouse_migrations.migration import Migration
 TESTS_DIR = Path(__file__).parent
 
 
-def test_empty_list_of_migrations_ok(cluster):
+def test_empty_list_of_migrations_ok(cluster: ClickhouseCluster):
     with tempfile.TemporaryDirectory("empty_dir") as temp_dir:
         applied = cluster.migrate("pytest", temp_dir)
 
         assert len(applied) == 0
 
 
-def test_deleted_migrations_exception(cluster):
+def test_deleted_migrations_exception(cluster: ClickhouseCluster):
     cluster.init_schema("pytest")
 
     with cluster.connection("pytest") as conn:
@@ -31,7 +32,7 @@ def test_deleted_migrations_exception(cluster):
         cluster.apply_migrations("pytest", [])
 
 
-def test_missing_migration_exception(cluster):
+def test_missing_migration_exception(cluster: ClickhouseCluster):
     cluster.init_schema("pytest")
 
     with cluster.connection("pytest") as conn:
@@ -48,7 +49,7 @@ def test_missing_migration_exception(cluster):
         cluster.apply_migrations("pytest", migrations)
 
 
-def test_modified_committed_migrations_exception(cluster):
+def test_modified_committed_migrations_exception(cluster: ClickhouseCluster):
     cluster.init_schema("pytest")
 
     with cluster.connection("pytest") as conn:
@@ -65,7 +66,7 @@ def test_modified_committed_migrations_exception(cluster):
         cluster.apply_migrations("pytest", migrations)
 
 
-def test_apply_new_migration_ok(cluster):
+def test_apply_new_migration_ok(cluster: ClickhouseCluster):
     cluster.init_schema("pytest")
 
     with cluster.connection("pytest") as conn:
@@ -84,7 +85,7 @@ def test_apply_new_migration_ok(cluster):
     assert results[0] == migrations[-1]
 
 
-def test_apply_two_new_migration_ok(cluster):
+def test_apply_two_new_migration_ok(cluster: ClickhouseCluster):
     cluster.init_schema("pytest")
 
     with cluster.connection("pytest") as conn:
@@ -113,7 +114,7 @@ def test_apply_two_new_migration_ok(cluster):
     assert results[2] == migrations[-1]
 
 
-def test_should_migrate_empty_database(cluster):
+def test_should_migrate_empty_database(cluster: ClickhouseCluster):
     cluster.create_db("pytest")
 
     tables = cluster.show_tables("pytest")
@@ -127,7 +128,7 @@ def test_should_migrate_empty_database(cluster):
     assert tables[1] == "schema_versions"
 
 
-def test_migrations_folder_is_empty_ok(cluster):
+def test_migrations_folder_is_empty_ok(cluster: ClickhouseCluster):
     with tempfile.TemporaryDirectory("empty_dir") as temp_dir:
         cluster.migrate("pytest", temp_dir)
 
@@ -172,40 +173,10 @@ def test_main_pass_db_url_ok():
     )
 
 
-def test_check_multistatement_arg():
-    context = get_context(["--multi-statement", "false"])
-    assert context.multi_statement is False
-
-    context = get_context(["--multi-statement", "True"])
-    assert context.multi_statement is True
-
-    context = get_context(["--multi-statement", "0"])
-    assert context.multi_statement is False
-
-
-def test_check_explicit_migrations_ok():
-    migrate(
-        get_context(
-            [
-                "--migrations",
-                "001_init",
-                "002",
-                "3",
-                "--migrations-dir",
-                str(TESTS_DIR / "complex_migrations"),
-            ]
-        )
+def test_check_explicit_migrations_ok(cluster):
+    migrations = cluster.migrate(
+        "pytest",
+        TESTS_DIR / "complex_migrations",
+        explicit_migrations=["001_init", "002", "3"],
     )
-
-
-def test_check_explicit_migrations_args_ok():
-    context = get_context(["--migrations", "001_init", "002_test2"])
-    assert context.migrations == ["001_init", "002_test2"]
-
-
-def test_check_fake_ok():
-    context = get_context(["--fake", ])
-    assert context.fake is True
-
-    context = get_context(["--no-fake",])
-    assert context.fake is False
+    assert len(migrations) == 3

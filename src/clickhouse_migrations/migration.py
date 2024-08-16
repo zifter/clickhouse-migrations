@@ -2,14 +2,14 @@ import hashlib
 import os
 from collections import namedtuple
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 Migration = namedtuple("Migration", ["version", "md5", "script"])
 
 
 class MigrationStorage:
-    def __init__(self, storage_dir: Path):
-        self.storage_dir: Path = storage_dir
+    def __init__(self, storage_dir: Union[Path, str]):
+        self.storage_dir: Path = Path(storage_dir)
 
     def filenames(self) -> List[Path]:
         l: List[Path] = []
