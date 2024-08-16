@@ -204,5 +204,8 @@ def test_check_explicit_migrations_args_ok():
 
 
 def test_check_fake_ok():
-    context = get_context(["--fake"])
+    context = get_context(["--fake", ])
     assert context.fake is True
+
+    context = get_context(["--no-fake",])
+    assert context.fake is False

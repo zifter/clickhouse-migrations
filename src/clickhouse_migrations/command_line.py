@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 import sys
@@ -74,8 +75,9 @@ def get_context(args):
     )
     parser.add_argument(
         "--multi-statement",
-        default=os.environ.get("MULTI_STATEMENT", "1"),
+        default=cast_to_bool(os.environ.get("MULTI_STATEMENT", "1")),
         type=bool,
+        action=argparse.BooleanOptionalAction,
         help="Path to list of migration files",
     )
     parser.add_argument(
@@ -91,14 +93,16 @@ def get_context(args):
     )
     parser.add_argument(
         "--dry-run",
-        default=os.environ.get("DRY_RUN", "0"),
+        default=cast_to_bool(os.environ.get("DRY_RUN", "0")),
         type=bool,
+        action=argparse.BooleanOptionalAction,
         help="Dry run mode",
     )
     parser.add_argument(
         "--fake",
-        default=os.environ.get("FAKE", "0"),
+        default=cast_to_bool(os.environ.get("FAKE", "0")),
         type=bool,
+        action=argparse.BooleanOptionalAction,
         help="Marks the migrations up to the target one (following the rules above) as applied, "
         "but without actually running the SQL to change your database schema.",
     )
@@ -111,8 +115,9 @@ def get_context(args):
     )
     parser.add_argument(
         "--secure",
-        default=os.environ.get("SECURE", "0"),
+        default=cast_to_bool(os.environ.get("SECURE", "0")),
         type=bool,
+        action=argparse.BooleanOptionalAction,
         help="Secure connection",
     )
 
