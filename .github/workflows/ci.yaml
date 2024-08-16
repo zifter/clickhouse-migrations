@@ -9,7 +9,7 @@ on:
     paths:
       - .github/workflows/**
       - src/**
-      - setup.cfg
+      - dev/**
       - tox.ini
 
 jobs:
