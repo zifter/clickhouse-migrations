@@ -7,6 +7,7 @@ on:
     branches:
       - main
     paths:
+      - .github/workflows/**
       - src/**
       - setup.cfg
       - tox.ini
@@ -20,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - Ubuntu
+          - ubuntu
 #          - Windows
 #          - MacOs
         py:
@@ -31,12 +32,16 @@ jobs:
           - "3.8"
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v2
         with:
           python-version: ${{ matrix.py }}
+
+      - uses: KengoTODA/actions-setup-docker-compose@v1
+        with:
+          version: '2.14.2' # the full version of `docker-compose` command
 
       - name: Docker compose up
         run: make docker-compose-up
@@ -46,3 +51,7 @@ jobs:
 
       - name: Test
         run: make test
+
+      - name: Stop
+        if: always()
+        run: make docker-compose-down
