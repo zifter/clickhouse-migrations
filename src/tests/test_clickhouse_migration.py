@@ -261,7 +261,7 @@ def test_fake_ok():
     )
     migrations = do_migrate(cluster, ctx)
 
-    # because of async appling some changes, we need to
+    # because of async applying some changes, we need to wait a bit
     sleep(1)
 
     applied_migrations = do_query_applied_migrations(cluster, ctx)
