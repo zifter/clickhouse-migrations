@@ -1,5 +1,6 @@
 import tempfile
 from pathlib import Path
+from time import sleep
 
 import pytest
 from clickhouse_driver.errors import ServerException
@@ -259,7 +260,12 @@ def test_fake_ok():
         ]
     )
     migrations = do_migrate(cluster, ctx)
+
+    # because of async appling some changes, we need to
+    sleep(1)
+
     applied_migrations = do_query_applied_migrations(cluster, ctx)
 
     assert len(migrations) == 4
     assert migrations == applied_migrations
+

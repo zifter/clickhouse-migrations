@@ -31,6 +31,8 @@ ORDER BY tuple(created_at)"""
         self._execute(single_schema if cluster_name is None else cluster_schema)
 
     def query_applied_migrations(self) -> List[Migration]:
+        self.optimize_schema_table()
+
         query = """SELECT
             version,
             script,
@@ -140,7 +142,6 @@ ORDER BY tuple(created_at)"""
                         }
                     ],
                 )
-                self._execute("OPTIMIZE TABLE schema_versions FINAL;")
             elif self._dryrun:
                 logging.debug(
                     "Skip updating schema versions because dry run is enabled"
@@ -161,6 +162,9 @@ ORDER BY tuple(created_at)"""
             logging.info("Migration is fully applied.")
 
         return migrations_to_process
+
+    def optimize_schema_table(self):
+        self._execute("OPTIMIZE TABLE schema_versions FINAL;")
 
     def _execute(self, statement, *args, **kwargs):
         logging.debug(statement)
