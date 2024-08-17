@@ -2,7 +2,7 @@ import hashlib
 import os
 from collections import namedtuple
 from pathlib import Path
-from typing import List, Union
+from typing import List, Optional, Union
 
 Migration = namedtuple("Migration", ["version", "md5", "script"])
 
@@ -19,7 +19,9 @@ class MigrationStorage:
 
         return l
 
-    def migrations(self, explicit_migrations: List[str] = None) -> List[Migration]:
+    def migrations(
+        self, explicit_migrations: Optional[List[str]] = None
+    ) -> List[Migration]:
         migrations: List[Migration] = []
 
         for full_path in self.filenames():
