@@ -113,9 +113,9 @@ ORDER BY tuple(created_at)"""
             logging.info("Migration contains %s statements to apply", len(statements))
             for statement in statements:
                 if fake:
-                    logging.warning("Fake mode, statement will be skipped")
+                    logging.warning("Fake mode, statement will be skipped: %s", statement)
                 elif self._dryrun:
-                    logging.info("Dry run mode, would have executed")
+                    logging.info("Dry run mode, would have executed: %s", statement)
                 else:
                     self._execute(statement)
 
