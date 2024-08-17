@@ -268,4 +268,3 @@ def test_fake_ok():
 
     assert len(migrations) == 4
     assert migrations == applied_migrations
-
