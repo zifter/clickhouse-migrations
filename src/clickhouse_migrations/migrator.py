@@ -113,11 +113,9 @@ ORDER BY tuple(created_at)"""
             logging.info("Migration contains %s statements to apply", len(statements))
             for statement in statements:
                 if fake:
-                    logging.warning(
-                        "Fake mode, statement will be skipped: %s", statement
-                    )
+                    logging.warning("Fake mode, statement will be skipped")
                 elif self._dryrun:
-                    logging.info("Dry run mode, would have executed: %s", statement)
+                    logging.info("Dry run mode, would have executed")
                 else:
                     self._execute(statement)
 
@@ -125,14 +123,21 @@ ORDER BY tuple(created_at)"""
             if fake:
                 logging.debug("update schema versions because fake option is enabled")
                 self._execute(
-                    "ALTER TABLE schema_versions UPDATE script = %(script)s, md5 = %(md5)s WHERE version = %(version)s",
+                    "ALTER TABLE schema_versions DELETE WHERE version = %(version)s;",
                     {
                         "version": migration.version,
-                        "script": migration.script,
-                        "md5": migration.md5,
                     },
                 )
-                # force run updating table in order to make all changes visible
+                self._execute(
+                    "INSERT INTO schema_versions(version, script, md5) VALUES",
+                    [
+                        {
+                            "version": migration.version,
+                            "script": migration.script,
+                            "md5": migration.md5,
+                        }
+                    ],
+                )
                 self._execute("OPTIMIZE TABLE schema_versions FINAL;")
             elif self._dryrun:
                 logging.debug(
