@@ -107,7 +107,7 @@ def get_context(args):
         default=cast_to_bool(os.environ.get("FAKE", "0")),
         type=bool,
         action=argparse.BooleanOptionalAction,
-        help="Marks the migrations up to the target one (following the rules above) as applied, "
+        help="Marks the migrations as applied, "
         "but without actually running the SQL to change your database schema.",
     )
     parser.add_argument(
@@ -115,14 +115,15 @@ def get_context(args):
         default=default_migrations.split(",") if default_migrations else [],
         type=str,
         nargs="+",
-        help="Dry run mode",
+        help="Explicit list of migrations to apply. "
+             "Specify file name, file stem or migration version like 001_init.sql, 002_test2, 003, 4",
     )
     parser.add_argument(
         "--secure",
         default=cast_to_bool(os.environ.get("SECURE", "0")),
         type=bool,
         action=argparse.BooleanOptionalAction,
-        help="Secure connection",
+        help="Use secure connection",
     )
 
     return parser.parse_args(args)

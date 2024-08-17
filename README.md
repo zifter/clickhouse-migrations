@@ -50,17 +50,20 @@ cluster = ClickhouseCluster(db_host, db_user, db_password)
 cluster.migrate(db_name, migrations_home, cluster_name=None,create_db_if_no_exists=True, multi_statement=True)
 ```
 
-Parameter | Description                                                       | Default
--------|-------------------------------------------------------------------|---------
-db_host | Clickhouse database hostname                                      | localhost
-db_port | Clickhouse database port                                          | 9000
-db_user | Clickhouse user                                                   | default
-db_password | Clichouse password                                                | default
-db_name| Clickhouse database name                                          | None
-migrations_home | Path to list of migration files                                   | <project_root>
-cluster_name | Name of Clickhouse topology cluster from <remote_servers>            | None
-create_db_if_no_exists | If the `db_name` is not present, enabling this will create the db | True
-multi_statement | Allow multiple statements in migration files                      | True
+Parameter | Description                                                                                         | Default
+-------|-----------------------------------------------------------------------------------------------------|---------
+db_host | Clickhouse database hostname                                                                        | localhost
+db_port | Clickhouse database port                                                                            | 9000
+db_user | Clickhouse user                                                                                     | default
+db_password | Clichouse password                                                                                  | default
+db_name| Clickhouse database name                                                                            | None
+migration_path | Path to list of migration files                                                                     | <project_root>
+migrations | Explicit list of migrations to apply                                                                | []
+cluster_name | Name of Clickhouse topology cluster from <remote_servers>                                           | None
+create_db_if_no_exists | If the `db_name` is not present, enabling this will create the db                                   | True
+multi_statement | Allow multiple statements in migration files                                                        | True
+secure | Use secure connection                                                                               | False
+fake | Marks the migrations as applied but without actually running the SQL to change your database schema | False
 
 ### Notes
 The Clickhouse driver does not natively support executing multipe statements in a single query.

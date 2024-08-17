@@ -2,7 +2,7 @@ import hashlib
 import os
 from collections import namedtuple
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Union
 
 Migration = namedtuple("Migration", ["version", "md5", "script"])
 
@@ -33,6 +33,7 @@ class MigrationStorage:
 
             if (
                 not explicit_migrations
+                or full_path.name in explicit_migrations
                 or full_path.stem in explicit_migrations
                 or version_string in explicit_migrations
                 or str(version_number) in explicit_migrations

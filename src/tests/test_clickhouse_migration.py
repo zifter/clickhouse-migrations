@@ -180,7 +180,7 @@ def test_main_pass_db_url_ok():
     assert len(migrations) == 1
 
 
-def test_check_explicit_migrations_ok():
+def test_check_explicit_migrations_1_ok():
     migrations = migrate(
         get_context(
             [
@@ -196,6 +196,23 @@ def test_check_explicit_migrations_ok():
         )
     )
     assert len(migrations) == 3
+
+
+def test_check_explicit_migrations_2_ok():
+    migrations = migrate(
+        get_context(
+            [
+                "--db-url",
+                "clickhouse://default:@localhost:9000/pytest",
+                "--migrations-dir",
+                str(TESTS_DIR / "complex_migrations"),
+                "--migrations",
+                "001_init.sql",
+                "2",
+            ]
+        )
+    )
+    assert len(migrations) == 2
 
 
 def test_fake_ok():
