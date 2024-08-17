@@ -116,7 +116,7 @@ def get_context(args):
         type=str,
         nargs="+",
         help="Explicit list of migrations to apply. "
-             "Specify file name, file stem or migration version like 001_init.sql, 002_test2, 003, 4",
+        "Specify file name, file stem or migration version like 001_init.sql, 002_test2, 003, 4",
     )
     parser.add_argument(
         "--secure",
