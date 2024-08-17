@@ -92,7 +92,7 @@ class ClickhouseCluster:
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
         dryrun: bool = False,
-        explicit_migrations: Optional[List[str]] = None,
+        explicit_migrations: List[str] = None,
         fake: bool = False,
     ):
         db_name = db_name if db_name is not None else self.default_db_name

@@ -35,7 +35,8 @@ ORDER BY tuple(created_at)"""
             version,
             script,
             md5
-        FROM schema_versions"""
+        FROM schema_versions
+        ORDER BY version"""
 
         result = self._execute(query, with_column_types=True)
         column_names = [c[0] for c in result[len(result) - 1]]
@@ -121,7 +122,24 @@ ORDER BY tuple(created_at)"""
                     self._execute(statement)
 
             logging.info("Migration applied, need to update schema version table.")
-            if not self._dryrun:
+            if fake:
+                logging.debug("update schema versions because fake option is enabled")
+                self._execute(
+                    "ALTER TABLE schema_versions UPDATE script = %(script)s, md5 = %(md5)s WHERE version = %(version)s",
+                    {
+                        "version": migration.version,
+                        "script": migration.script,
+                        "md5": migration.md5,
+                    },
+                )
+                # force run updating table in order to make all changes visible
+                self._execute("OPTIMIZE TABLE schema_versions FINAL;")
+            elif self._dryrun:
+                logging.debug(
+                    "Skip updating schema versions because dry run is enabled"
+                )
+            else:
+                logging.debug("Insert new schemas")
                 self._execute(
                     "INSERT INTO schema_versions(version, script, md5) VALUES",
                     [

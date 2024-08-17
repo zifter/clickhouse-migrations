@@ -5,7 +5,13 @@ import pytest
 from clickhouse_driver.errors import ServerException
 
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
-from clickhouse_migrations.command_line import get_context, migrate
+from clickhouse_migrations.command_line import (
+    create_cluster,
+    do_migrate,
+    do_query_applied_migrations,
+    get_context,
+    migrate,
+)
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
 
@@ -161,7 +167,7 @@ def test_main_pass_db_name_ok():
 
 
 def test_main_pass_db_url_ok():
-    migrate(
+    migrations = migrate(
         get_context(
             [
                 "--db-url",
@@ -171,12 +177,72 @@ def test_main_pass_db_url_ok():
             ]
         )
     )
+    assert len(migrations) == 1
 
 
-def test_check_explicit_migrations_ok(cluster):
-    migrations = cluster.migrate(
-        "pytest",
-        TESTS_DIR / "complex_migrations",
-        explicit_migrations=["001_init", "002", "3"],
+def test_check_explicit_migrations_ok():
+    migrations = migrate(
+        get_context(
+            [
+                "--db-url",
+                "clickhouse://default:@localhost:9000/pytest",
+                "--migrations-dir",
+                str(TESTS_DIR / "complex_migrations"),
+                "--migrations",
+                "001_init",
+                "002",
+                "3",
+            ]
+        )
     )
     assert len(migrations) == 3
+
+
+def test_fake_ok():
+    # apply first migrations
+    ctx = get_context(
+        [
+            "--db-url",
+            "clickhouse://default:@localhost:9000/pytest",
+            "--migrations-dir",
+            str(TESTS_DIR / "complex_migrations"),
+        ]
+    )
+    cluster = create_cluster(ctx)
+    migrations = do_migrate(cluster, ctx)
+    applied_migrations = do_query_applied_migrations(cluster, ctx)
+
+    assert len(migrations) == 4
+    assert migrations == applied_migrations
+
+    # just run the same but with fake flag
+    ctx = get_context(
+        [
+            "--db-url",
+            "clickhouse://default:@localhost:9000/pytest",
+            "--migrations-dir",
+            str(TESTS_DIR / "complex_migrations"),
+            "--fake",
+        ]
+    )
+    migrations = do_migrate(cluster, ctx)
+    applied_migrations = do_query_applied_migrations(cluster, ctx)
+
+    assert len(migrations) == 4
+    assert migrations == applied_migrations
+
+    # run with changed md5 sum
+    ctx = get_context(
+        [
+            "--db-url",
+            "clickhouse://default:@localhost:9000/pytest",
+            "--migrations-dir",
+            str(TESTS_DIR / "complex_migrations_changed"),
+            "--fake",
+        ]
+    )
+    migrations = do_migrate(cluster, ctx)
+    applied_migrations = do_query_applied_migrations(cluster, ctx)
+
+    assert len(migrations) == 4
+    assert migrations == applied_migrations

@@ -19,9 +19,7 @@ class MigrationStorage:
 
         return l
 
-    def migrations(
-        self, explicit_migrations: Optional[List[str]] = None
-    ) -> List[Migration]:
+    def migrations(self, explicit_migrations: List[str] = None) -> List[Migration]:
         migrations: List[Migration] = []
 
         for full_path in self.filenames():
@@ -34,7 +32,7 @@ class MigrationStorage:
             )
 
             if (
-                explicit_migrations is None
+                not explicit_migrations
                 or full_path.stem in explicit_migrations
                 or version_string in explicit_migrations
                 or str(version_number) in explicit_migrations
