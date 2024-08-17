@@ -9,7 +9,7 @@ on:
     paths:
       - .github/workflows/**
       - src/**
-      - setup.cfg
+      - dev/**
       - tox.ini
 
 jobs:
@@ -29,7 +29,6 @@ jobs:
           - "3.11"
           - "3.10"
           - "3.9"
-          - "3.8"
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4

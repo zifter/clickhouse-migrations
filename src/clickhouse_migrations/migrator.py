@@ -31,11 +31,14 @@ ORDER BY tuple(created_at)"""
         self._execute(single_schema if cluster_name is None else cluster_schema)
 
     def query_applied_migrations(self) -> List[Migration]:
+        self.optimize_schema_table()
+
         query = """SELECT
             version,
             script,
             md5
-        FROM schema_versions"""
+        FROM schema_versions
+        ORDER BY version"""
 
         result = self._execute(query, with_column_types=True)
         column_names = [c[0] for c in result[len(result) - 1]]
@@ -90,29 +93,61 @@ ORDER BY tuple(created_at)"""
         return sorted(to_apply, key=lambda x: x.version)
 
     def apply_migration(
-        self, migrations: List[Migration], multi_statement: bool
+        self,
+        migrations: List[Migration],
+        multi_statement: bool,
+        fake: bool = False,
     ) -> List[Migration]:
-        new_migrations = self.migrations_to_apply(migrations)
+        migrations_to_process = (
+            migrations if fake else self.migrations_to_apply(migrations)
+        )
 
-        logging.info("Total migrations to apply: %d", len(new_migrations))
+        logging.info("Total migrations to apply: %d", len(migrations_to_process))
 
-        if not new_migrations:
+        if not migrations_to_process:
             return []
 
-        for migration in new_migrations:
+        for migration in migrations_to_process:
             logging.info("Execute migration %s", migration)
 
             statements = self.script_to_statements(migration.script, multi_statement)
 
             logging.info("Migration contains %s statements to apply", len(statements))
             for statement in statements:
-                if not self._dryrun:
-                    self._execute(statement)
-                else:
+                if fake:
+                    logging.warning(
+                        "Fake mode, statement will be skipped: %s", statement
+                    )
+                elif self._dryrun:
                     logging.info("Dry run mode, would have executed: %s", statement)
+                else:
+                    self._execute(statement)
 
             logging.info("Migration applied, need to update schema version table.")
-            if not self._dryrun:
+            if fake:
+                logging.debug("update schema versions because fake option is enabled")
+                self._execute(
+                    "ALTER TABLE schema_versions DELETE WHERE version = %(version)s;",
+                    {
+                        "version": migration.version,
+                    },
+                )
+                self._execute(
+                    "INSERT INTO schema_versions(version, script, md5) VALUES",
+                    [
+                        {
+                            "version": migration.version,
+                            "script": migration.script,
+                            "md5": migration.md5,
+                        }
+                    ],
+                )
+            elif self._dryrun:
+                logging.debug(
+                    "Skip updating schema versions because dry run is enabled"
+                )
+            else:
+                logging.debug("Insert new schemas")
                 self._execute(
                     "INSERT INTO schema_versions(version, script, md5) VALUES",
                     [
@@ -126,7 +161,10 @@ ORDER BY tuple(created_at)"""
 
             logging.info("Migration is fully applied.")
 
-        return new_migrations
+        return migrations_to_process
+
+    def optimize_schema_table(self):
+        self._execute("OPTIMIZE TABLE schema_versions FINAL;")
 
     def _execute(self, statement, *args, **kwargs):
         logging.debug(statement)
