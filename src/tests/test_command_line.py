@@ -32,3 +32,14 @@ def test_check_fake_ok():
         ]
     )
     assert context.fake is False
+
+
+def test_check_create_db_if_not_exists_ok():
+    context = get_context([])
+    assert context.create_db_if_not_exists is True
+
+    context = get_context(["--create-db-if-not-exists"])
+    assert context.create_db_if_not_exists is True
+
+    context = get_context(["--no-create-db-if-not-exists"])
+    assert context.create_db_if_not_exists is False
