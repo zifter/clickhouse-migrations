@@ -125,6 +125,13 @@ def get_context(args):
         action=argparse.BooleanOptionalAction,
         help="Use secure connection",
     )
+    parser.add_argument(
+        "--create-db-if-not-exists",
+        default=cast_to_bool(os.environ.get("CREATE_DB_IF_NOT_EXISTS", "1")),
+        type=bool,
+        action=argparse.BooleanOptionalAction,
+        help="Create database if it does not exist",
+    )
 
     return parser.parse_args(args)
 
@@ -146,6 +153,7 @@ def do_migrate(cluster, ctx) -> List[Migration]:
         migration_path=ctx.migrations_dir,
         explicit_migrations=ctx.migrations,
         cluster_name=ctx.cluster_name,
+        create_db_if_no_exists=ctx.create_db_if_not_exists,
         multi_statement=ctx.multi_statement,
         dryrun=ctx.dry_run,
         fake=ctx.fake,
