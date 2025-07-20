@@ -33,7 +33,7 @@ ORDER BY tuple(created_at)"""
     def query_applied_migrations(self) -> List[Migration]:
         self.optimize_schema_table()
 
-        query = """SELECT
+        query = """SELECT DISTINCT
             version,
             script,
             md5
