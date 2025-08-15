@@ -39,6 +39,10 @@ open-coverage:
 docker-compose-up:
 	cd dev && make configure up
 
+.PHONY: docker-compose-up-deamon
+docker-compose-up-deamon:
+	cd dev && make configure up-deamon
+
 .PHONY: docker-compose-down
 docker-compose-down:
 	cd dev && make down clean

@@ -1,9 +1,6 @@
 from pathlib import Path
 
-import pytest
-
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
-from clickhouse_migrations.migrator import Migrator
 
 TESTS_DIR = Path(__file__).parent
 

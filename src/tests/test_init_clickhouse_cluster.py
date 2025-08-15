@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from clickhouse_migrations.migration import Migration, MigrationStorage
 
 TESTS_DIR = Path(__file__).parent

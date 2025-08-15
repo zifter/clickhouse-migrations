@@ -1,9 +1,6 @@
 import logging
 from pathlib import Path
 
-import pytest
-
-from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.migration import MigrationStorage
 
 TESTS_DIR = Path(__file__).parent

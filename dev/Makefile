@@ -12,6 +12,9 @@ configure:
 up:
 	docker-compose up
 
+up-deamon:
+	docker-compose up -d
+
 start:
 	docker-compose start
 

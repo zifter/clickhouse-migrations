@@ -1,8 +1,7 @@
 import pytest
 
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
-
-from migrator import Migrator
+from clickhouse_migrations.migrator import Migrator
 
 
 @pytest.fixture
@@ -13,6 +12,7 @@ def cluster() -> ClickhouseCluster:
         db_password="",
         db_name="pytest",
     )
+
 
 @pytest.fixture(autouse=True)
 def before(cluster: ClickhouseCluster):
