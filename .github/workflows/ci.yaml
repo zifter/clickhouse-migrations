@@ -25,7 +25,8 @@ jobs:
 #          - Windows
 #          - MacOs
         py:
-          - "3.12.0"
+          - "3.13"
+          - "3.12"
           - "3.11"
           - "3.10"
           - "3.9"
@@ -43,7 +44,7 @@ jobs:
           version: '2.14.2' # the full version of `docker-compose` command
 
       - name: Docker compose up
-        run: make docker-compose-up
+        run: make docker-compose-up-deamon
 
       - name: Setup
         run: make setup

@@ -1,17 +1,9 @@
 from pathlib import Path
 
-import pytest
-
-from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.migration import Migration, MigrationStorage
 
 TESTS_DIR = Path(__file__).parent
 MIGRATIONS = MigrationStorage(TESTS_DIR / "migrations").migrations()
-
-
-@pytest.fixture
-def cluster():
-    return ClickhouseCluster(db_url="clickhouse://default:@localhost:9000/pytest")
 
 
 def test_apply_new_migration_ok(cluster):

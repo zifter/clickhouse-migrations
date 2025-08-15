@@ -1,34 +1,10 @@
 import logging
 from pathlib import Path
 
-import pytest
-
-from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.migration import MigrationStorage
 
 TESTS_DIR = Path(__file__).parent
 MIGRATIONS = MigrationStorage(TESTS_DIR / "migrations").migrations()
-
-
-@pytest.fixture
-def cluster():
-    return ClickhouseCluster(db_host="localhost", db_user="default", db_password="")
-
-
-@pytest.fixture(name="_clean_slate")
-def clean_slate(cluster):
-    with cluster.connection("") as conn:
-        conn.execute("DROP DATABASE IF EXISTS pytest ON CLUSTER company_cluster")
-
-
-@pytest.fixture(name="_schema")
-def schema(cluster, _clean_slate):
-    conn = cluster.connection("")
-    conn.execute("CREATE DATABASE pytest ON CLUSTER company_cluster")
-    conn = cluster.connection("pytest")
-    cluster.init_schema("pytest")
-
-    return conn
 
 
 def test_dryrun(_schema, cluster, caplog):

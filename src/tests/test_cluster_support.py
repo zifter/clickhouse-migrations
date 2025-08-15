@@ -1,9 +1,6 @@
 from pathlib import Path
 
-import pytest
-
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
-from clickhouse_migrations.migrator import Migrator
 
 TESTS_DIR = Path(__file__).parent
 
@@ -15,28 +12,6 @@ CLICKHOUSE_SERVERS = (
 )
 
 
-@pytest.fixture
-def cluster():
-    return ClickhouseCluster(db_host="localhost", db_user="default", db_password="")
-
-
-@pytest.fixture(name="_clean_slate")
-def clean_slate(cluster):
-    with cluster.connection("") as conn:
-        conn.execute("DROP DATABASE IF EXISTS pytest ON CLUSTER company_cluster")
-
-
-@pytest.fixture(name="_schema")
-def schema(cluster, _clean_slate):
-    conn = cluster.connection("")
-    conn.execute("CREATE DATABASE pytest ON CLUSTER company_cluster")
-    conn = cluster.connection("pytest")
-    migrator = Migrator(conn)
-    migrator.init_schema("company_cluster")
-
-    return conn
-
-
 def test_replicated_schema(_schema):
     with _schema:
         for server in CLICKHOUSE_SERVERS:
@@ -45,7 +20,7 @@ def test_replicated_schema(_schema):
             )[0][0]
             assert (
                 table_engine
-                == "ReplicatedMergeTree('/clickhouse/tables/{database}/{table}', '{replica}') ORDER BY tuple(created_at) SETTINGS index_granularity = 8192"  # pylint: disable=C0301 # noqa: E501
+                == "ReplicatedMergeTree('/clickhouse/tables/pytest/schema_versions', '{replica}') ORDER BY tuple(created_at) SETTINGS index_granularity = 8192"  # pylint: disable=C0301 # noqa: E501
             )
 
 
