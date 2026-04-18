@@ -31,43 +31,107 @@ Package | Differences
 
 You can install from pypi using `pip install clickhouse-migrations`.
 
+## Migration files
+
+Migration files follow the naming convention `{VERSION}_{name}.sql`, e.g. `001_init.sql`, `002_add_users.sql`.
+
+Each file contains one or more SQL statements separated by semicolons:
+
+```sql
+-- migrations/001_init.sql
+CREATE TABLE mydb.events (
+    id     UInt32,
+    name   String
+) ENGINE = MergeTree()
+ORDER BY id;
+
+ALTER TABLE mydb.events ADD COLUMN created_at DateTime DEFAULT now();
+```
+
 ## Usage
 
 ### In command line
 ```bash
 clickhouse-migrations --db-host localhost \
+    --db-port 9000 \
     --db-user default \
     --db-password secret \
     --db-name test \
     --migrations-dir ./migrations
 ```
 
+Alternatively, connect via URL:
+```bash
+clickhouse-migrations --db-url clickhouse://default:secret@localhost:9000/test \
+    --migrations-dir ./migrations
+```
+
+All options can also be set via environment variables:
+
+CLI flag | Environment variable | Default
+---------|---------------------|--------
+`--db-host` | `DB_HOST` | `localhost`
+`--db-port` | `DB_PORT` | `9000`
+`--db-user` | `DB_USER` | `default`
+`--db-password` | `DB_PASSWORD` | *(empty)*
+`--db-name` | `DB_NAME` | —
+`--db-url` | `DB_URL` | —
+`--migrations-dir` | `MIGRATIONS_DIR` | `./migrations`
+`--cluster-name` | `CLUSTER_NAME` | —
+`--multi-statement` | `MULTI_STATEMENT` | `true`
+`--create-db-if-not-exists` | `CREATE_DB_IF_NOT_EXISTS` | `true`
+`--dry-run` | `DRY_RUN` | `false`
+`--fake` | `FAKE` | `false`
+`--secure` | `SECURE` | `false`
+`--log-level` | `LOG_LEVEL` | `WARNING`
+
 ### In code
 ```python
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 
-cluster = ClickhouseCluster(db_host, db_user, db_password)
-cluster.migrate(db_name, migrations_home, cluster_name=None,create_db_if_no_exists=True, multi_statement=True)
+cluster = ClickhouseCluster(
+    db_host="localhost",
+    db_port=9000,
+    db_user="default",
+    db_password="secret",
+)
+cluster.migrate(
+    db_name="test",
+    migration_path="./migrations",
+    cluster_name=None,
+    create_db_if_no_exists=True,
+    multi_statement=True,
+    dryrun=False,
+    fake=False,
+)
 ```
 
-Parameter | Description                                                                                         | Default
--------|-----------------------------------------------------------------------------------------------------|---------
-db_host | Clickhouse database hostname                                                                        | localhost
-db_port | Clickhouse database port                                                                            | 9000
-db_user | Clickhouse user                                                                                     | default
-db_password | Clichouse password                                                                                  | default
-db_name| Clickhouse database name                                                                            | None
-migration_path | Path to list of migration files                                                                     | <project_root>
-migrations | Explicit list of migrations to apply                                                                | []
-cluster_name | Name of Clickhouse topology cluster from <remote_servers>                                           | None
-create_db_if_no_exists | If the `db_name` is not present, enabling this will create the db                                   | True
-multi_statement | Allow multiple statements in migration files                                                        | True
-secure | Use secure connection                                                                               | False
-fake | Marks the migrations as applied but without actually running the SQL to change your database schema | False
+Alternatively, connect via URL:
+```python
+cluster = ClickhouseCluster(db_url="clickhouse://default:secret@localhost:9000/test")
+cluster.migrate(db_name="test", migration_path="./migrations")
+```
+
+Parameter | Description | Default
+-------|-------------|--------
+`db_host` | ClickHouse database hostname | `localhost`
+`db_port` | ClickHouse database port | `9000`
+`db_user` | ClickHouse user | `default`
+`db_password` | ClickHouse password | *(empty)*
+`db_url` | ClickHouse connection URL (alternative to individual params) | —
+`db_name` | ClickHouse database name | —
+`migration_path` | Path to directory with migration files | `./migrations`
+`explicit_migrations` | Explicit list of migrations to apply | `[]`
+`cluster_name` | Name of ClickHouse topology cluster from `<remote_servers>` | —
+`create_db_if_no_exists` | Create the database if it does not exist | `True`
+`multi_statement` | Allow multiple statements per migration file | `True`
+`dryrun` | Print migrations without executing them | `False`
+`fake` | Mark migrations as applied without executing SQL | `False`
+`secure` | Use secure (TLS) connection | `False`
 
 ### Notes
-The Clickhouse driver does not natively support executing multipe statements in a single query.
-To allow for multiple statements in a single migration, you can use the multi_statement param.
+The ClickHouse driver does not natively support executing multiple statements in a single query.
+To allow for multiple statements in a single migration, you can use the `multi_statement` param.
 There are two important caveats:
-* This mode splits the migration text into separately-executed statements by a semi-colon ;. Thus cannot be used when a statement in the migration contains a string with a semi-colon.
+* This mode splits the migration text into separately-executed statements by a semi-colon `;`. Thus cannot be used when a statement in the migration contains a string with a semi-colon.
 * The queries are not executed in any sort of transaction/batch, meaning you are responsible for fixing partial migrations.
