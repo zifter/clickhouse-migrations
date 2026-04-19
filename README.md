@@ -135,3 +135,7 @@ To allow for multiple statements in a single migration, you can use the `multi_s
 There are two important caveats:
 * This mode splits the migration text into separately-executed statements by a semi-colon `;`. Thus cannot be used when a statement in the migration contains a string with a semi-colon.
 * The queries are not executed in any sort of transaction/batch, meaning you are responsible for fixing partial migrations.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=zifter/clickhouse-migrations&type=Date)](https://star-history.com/#zifter/clickhouse-migrations&Date)
