@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.10.0](https://github.com/zifter/clickhouse-migrations/tree/v0.10.0) (2026-04-19)
+
+[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.9.1...v0.10.0)
+
+**What's Changed:**
+- Add Python 3.14 support. Done by @zifter
+- Improve README: fix typos, add migration example, document all parameters. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/41
+- Add star history chart to README. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/42
+
+
 ## [v0.8.0](https://github.com/zifter/clickhouse-migrations/tree/v0.8.0) (2024-08-18)
 
 [Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.7.1...v0.8.0)
