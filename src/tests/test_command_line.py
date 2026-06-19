@@ -43,3 +43,18 @@ def test_check_create_db_if_not_exists_ok():
 
     context = get_context(["--no-create-db-if-not-exists"])
     assert context.create_db_if_not_exists is False
+
+
+def test_check_migration_log_format_arg_ok():
+    context = get_context([])
+    assert context.migration_log_format == "full"
+
+    context = get_context(["--migration-log-format", "compact"])
+    assert context.migration_log_format == "compact"
+
+
+def test_check_migration_log_format_env_ok(monkeypatch):
+    monkeypatch.setenv("MIGRATION_LOG_FORMAT", "compact")
+
+    context = get_context([])
+    assert context.migration_log_format == "compact"

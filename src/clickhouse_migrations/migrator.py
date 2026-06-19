@@ -6,11 +6,27 @@ from clickhouse_driver import Client
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
 
+MIGRATION_LOG_FORMAT_FULL = "full"
+MIGRATION_LOG_FORMAT_COMPACT = "compact"
+MIGRATION_LOG_FORMATS = (MIGRATION_LOG_FORMAT_FULL, MIGRATION_LOG_FORMAT_COMPACT)
+
 
 class Migrator:
-    def __init__(self, conn: Client, dryrun: bool = False):
+    def __init__(
+        self,
+        conn: Client,
+        dryrun: bool = False,
+        migration_log_format: str = MIGRATION_LOG_FORMAT_FULL,
+    ):
+        if migration_log_format not in MIGRATION_LOG_FORMATS:
+            raise ValueError(
+                f"Unknown migration log format: {migration_log_format}. "
+                f"Expected one of: {', '.join(MIGRATION_LOG_FORMATS)}"
+            )
+
         self._conn: Client = conn
         self._dryrun = dryrun
+        self._migration_log_format = migration_log_format
 
     def init_schema(self, cluster_name: Optional[str] = None):
         cluster_schema = f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER "{cluster_name}" (
@@ -92,6 +108,12 @@ ORDER BY tuple(created_at)"""
         ]
         return sorted(to_apply, key=lambda x: x.version)
 
+    def format_migration_log(self, migration: Migration) -> str:
+        if self._migration_log_format == MIGRATION_LOG_FORMAT_COMPACT:
+            return f"version={migration.version}, md5={migration.md5}"
+
+        return str(migration)
+
     def apply_migration(
         self,
         migrations: List[Migration],
@@ -108,7 +130,7 @@ ORDER BY tuple(created_at)"""
             return []
 
         for migration in migrations_to_process:
-            logging.info("Execute migration %s", migration)
+            logging.info("Execute migration %s", self.format_migration_log(migration))
 
             statements = self.script_to_statements(migration.script, multi_statement)
 
