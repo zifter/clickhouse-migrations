@@ -84,6 +84,7 @@ CLI flag | Environment variable | Default
 `--fake` | `FAKE` | `false`
 `--secure` | `SECURE` | `false`
 `--log-level` | `LOG_LEVEL` | `WARNING`
+`--migration-log-format` | `MIGRATION_LOG_FORMAT` | `full`
 
 ### In code
 ```python
@@ -103,6 +104,7 @@ cluster.migrate(
     multi_statement=True,
     dryrun=False,
     fake=False,
+    migration_log_format="full",
 )
 ```
 
@@ -128,6 +130,7 @@ Parameter | Description | Default
 `dryrun` | Print migrations without executing them | `False`
 `fake` | Mark migrations as applied without executing SQL | `False`
 `secure` | Use secure (TLS) connection | `False`
+`migration_log_format` | Migration log format `full` logs the full Migration object, `compact` logs only version and md5 | `full`
 
 ### Notes
 The ClickHouse driver does not natively support executing multiple statements in a single query.

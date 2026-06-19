@@ -15,7 +15,7 @@ from clickhouse_migrations.defaults import (
     MIGRATIONS_DIR,
 )
 from clickhouse_migrations.migration import Migration
-from clickhouse_migrations.migrator import Migrator
+from clickhouse_migrations.migrator import MIGRATION_LOG_FORMATS, Migrator
 
 
 def log_level(value: str) -> str:
@@ -29,6 +29,15 @@ def log_level(value: str) -> str:
         return value.upper()
 
     raise ValueError
+
+
+def migration_log_format(value: str) -> str:
+    normalized_value = value.lower()
+    if normalized_value in MIGRATION_LOG_FORMATS:
+        return normalized_value
+    raise ValueError(
+        f"Unknown migration log format: {value}. Expected one of: {', '.join(MIGRATION_LOG_FORMATS)}"
+    )
 
 
 def cast_to_bool(value: str):
@@ -89,6 +98,12 @@ def get_context(args):
         default=os.environ.get("LOG_LEVEL", "WARNING"),
         type=log_level,
         help="Log level",
+    )
+    parser.add_argument(
+        "--migration-log-format",
+        default=os.environ.get("MIGRATION_LOG_FORMAT", "full"),
+        type=migration_log_format,
+        help="Migration log format: full or compact",
     )
     parser.add_argument(
         "--cluster-name",
@@ -157,6 +172,7 @@ def do_migrate(cluster, ctx) -> List[Migration]:
         multi_statement=ctx.multi_statement,
         dryrun=ctx.dry_run,
         fake=ctx.fake,
+        migration_log_format=ctx.migration_log_format,
     )
 
 

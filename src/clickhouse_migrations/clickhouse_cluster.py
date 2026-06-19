@@ -94,6 +94,7 @@ class ClickhouseCluster:
         dryrun: bool = False,
         explicit_migrations: Optional[List[str]] = None,
         fake: bool = False,
+        migration_log_format: str = "full",
     ):
         db_name = db_name if db_name is not None else self.default_db_name
 
@@ -108,6 +109,7 @@ class ClickhouseCluster:
             multi_statement=multi_statement,
             dryrun=dryrun,
             fake=fake,
+            migration_log_format=migration_log_format,
         )
 
     def apply_migrations(
@@ -119,6 +121,7 @@ class ClickhouseCluster:
         create_db_if_no_exists: bool = True,
         multi_statement: bool = True,
         fake: bool = False,
+        migration_log_format: str = "full",
     ) -> List[Migration]:
         if create_db_if_no_exists:
             if cluster_name is None:
@@ -127,6 +130,6 @@ class ClickhouseCluster:
                 self.create_db(db_name, cluster_name)
 
         with self.connection(db_name) as conn:
-            migrator = Migrator(conn, dryrun)
+            migrator = Migrator(conn, dryrun, migration_log_format=migration_log_format)
             migrator.init_schema(cluster_name)
             return migrator.apply_migration(migrations, multi_statement, fake=fake)

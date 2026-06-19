@@ -1,3 +1,6 @@
+import pytest
+
+from clickhouse_migrations.migration import Migration
 from clickhouse_migrations.migrator import Migrator
 
 
@@ -45,3 +48,30 @@ def test_split_and_ignore_empy_ok():
 
     assert len(statemets) == 1
     assert statemets[0][-1] == ";"
+
+
+def test_full_migration_log_format_keeps_previous_behavior():
+    migration = Migration(
+        version=1,
+        md5="abc",
+        script="CREATE TABLE test(value String)",
+    )
+    migrator = Migrator(None)
+
+    assert migrator.format_migration_log(migration) == str(migration)
+
+
+def test_compact_migration_log_format_does_not_include_script():
+    migration = Migration(
+        version=1,
+        md5="abc",
+        script="CREATE TABLE test(value String)",
+    )
+    migrator = Migrator(None, migration_log_format="compact")
+
+    assert migrator.format_migration_log(migration) == "version=1, md5=abc"
+
+
+def test_unknown_migration_log_format_raises_error():
+    with pytest.raises(ValueError):
+        Migrator(None, migration_log_format="unknown")
