@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.11.0](https://github.com/zifter/clickhouse-migrations/tree/v0.11.0) (2026-06-19)
+
+[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.10.0...v0.11.0)
+
+**What's Changed:**
+- Add `--migration-log-format` option (`full`/`compact`) to control migration log verbosity. Done by @MaximTar in https://github.com/zifter/clickhouse-migrations/pull/44
+
+
 ## [v0.10.0](https://github.com/zifter/clickhouse-migrations/tree/v0.10.0) (2026-04-19)
 
 [Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.9.1...v0.10.0)
