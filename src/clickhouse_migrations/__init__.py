@@ -1,6 +1,7 @@
 """
 Simple file-based migrations for clickhouse
 """
+
 from importlib.metadata import PackageNotFoundError, version
 
 try:
