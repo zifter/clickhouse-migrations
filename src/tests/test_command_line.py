@@ -1,16 +1,74 @@
 from pathlib import Path
 
-from clickhouse_migrations.command_line import get_context
+from clickhouse_migrations.command_line import cast_to_bool, get_context
 
 TESTS_DIR = Path(__file__).parent
 
 
+def test_cast_to_bool_ok():
+    for value in ("1", "true", "True", "TRUE", "yes", "YES", "y", "Y"):
+        assert cast_to_bool(value) is True
+
+    for value in ("0", "false", "False", "no", "n", "off", "", "garbage"):
+        assert cast_to_bool(value) is False
+
+
 def test_check_multistatement_arg():
+    context = get_context([])
+    assert context.multi_statement is True
+
     context = get_context(["--multi-statement"])
     assert context.multi_statement is True
 
     context = get_context(["--no-multi-statement"])
     assert context.multi_statement is False
+
+
+def test_check_dry_run_ok():
+    context = get_context([])
+    assert context.dry_run is False
+
+    context = get_context(["--dry-run"])
+    assert context.dry_run is True
+
+    context = get_context(["--no-dry-run"])
+    assert context.dry_run is False
+
+
+def test_check_secure_ok():
+    context = get_context([])
+    assert context.secure is False
+
+    context = get_context(["--secure"])
+    assert context.secure is True
+
+    context = get_context(["--no-secure"])
+    assert context.secure is False
+
+
+def test_check_boolean_args_default_from_env(monkeypatch):
+    monkeypatch.setenv("MULTI_STATEMENT", "0")
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("FAKE", "yes")
+    monkeypatch.setenv("SECURE", "y")
+    monkeypatch.setenv("CREATE_DB_IF_NOT_EXISTS", "false")
+
+    context = get_context([])
+    assert context.multi_statement is False
+    assert context.dry_run is True
+    assert context.fake is True
+    assert context.secure is True
+    assert context.create_db_if_not_exists is False
+
+
+def test_check_boolean_args_cli_overrides_env(monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "1")
+    context = get_context(["--no-dry-run"])
+    assert context.dry_run is False
+
+    monkeypatch.setenv("SECURE", "0")
+    context = get_context(["--secure"])
+    assert context.secure is True
 
 
 def test_check_explicit_migrations_args_ok():
