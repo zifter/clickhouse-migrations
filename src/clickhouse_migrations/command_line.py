@@ -89,7 +89,6 @@ def get_context(args):
     parser.add_argument(
         "--multi-statement",
         default=cast_to_bool(os.environ.get("MULTI_STATEMENT", "1")),
-        type=bool,
         action=argparse.BooleanOptionalAction,
         help="Path to list of migration files",
     )
@@ -113,14 +112,12 @@ def get_context(args):
     parser.add_argument(
         "--dry-run",
         default=cast_to_bool(os.environ.get("DRY_RUN", "0")),
-        type=bool,
         action=argparse.BooleanOptionalAction,
         help="Dry run mode",
     )
     parser.add_argument(
         "--fake",
         default=cast_to_bool(os.environ.get("FAKE", "0")),
-        type=bool,
         action=argparse.BooleanOptionalAction,
         help="Marks the migrations as applied, "
         "but without actually running the SQL to change your database schema.",
@@ -136,14 +133,12 @@ def get_context(args):
     parser.add_argument(
         "--secure",
         default=cast_to_bool(os.environ.get("SECURE", "0")),
-        type=bool,
         action=argparse.BooleanOptionalAction,
         help="Use secure connection",
     )
     parser.add_argument(
         "--create-db-if-not-exists",
         default=cast_to_bool(os.environ.get("CREATE_DB_IF_NOT_EXISTS", "1")),
-        type=bool,
         action=argparse.BooleanOptionalAction,
         help="Create database if it does not exist",
     )
