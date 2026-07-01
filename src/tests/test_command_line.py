@@ -1,6 +1,10 @@
+import sys
 from pathlib import Path
 
-from clickhouse_migrations.command_line import cast_to_bool, get_context
+import pytest
+
+from clickhouse_migrations import __version__, command_line
+from clickhouse_migrations.command_line import cast_to_bool, get_context, main
 
 TESTS_DIR = Path(__file__).parent
 
@@ -116,3 +120,35 @@ def test_check_migration_log_format_env_ok(monkeypatch):
 
     context = get_context([])
     assert context.migration_log_format == "compact"
+
+
+def test_check_migration_log_format_invalid_rejected():
+    with pytest.raises(SystemExit):
+        get_context(["--migration-log-format", "bogus"])
+
+
+def test_version_flag_prints_version_and_exits(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        get_context(["--version"])
+
+    assert exc_info.value.code == 0
+    assert __version__ in capsys.readouterr().out
+
+
+def test_main_returns_zero_on_success(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["clickhouse-migrations"])
+    monkeypatch.setattr(command_line, "migrate", lambda ctx: [])
+
+    assert main() == 0
+
+
+def test_main_returns_error_on_migration_exception(monkeypatch, tmp_path):
+    (tmp_path / "001_a.sql").write_text("SELECT 1;", encoding="utf8")
+    (tmp_path / "001_b.sql").write_text("SELECT 2;", encoding="utf8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["clickhouse-migrations", "--migrations-dir", str(tmp_path)],
+    )
+
+    assert main() == 1

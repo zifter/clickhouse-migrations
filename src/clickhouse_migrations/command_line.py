@@ -6,6 +6,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import List
 
+from clickhouse_migrations import __version__
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.defaults import (
     DB_HOST,
@@ -14,6 +15,7 @@ from clickhouse_migrations.defaults import (
     DB_USER,
     MIGRATIONS_DIR,
 )
+from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
 from clickhouse_migrations.migrator import MIGRATION_LOG_FORMATS, Migrator
 
@@ -46,7 +48,11 @@ def cast_to_bool(value: str):
 
 def get_context(args):
     parser = ArgumentParser()
-    parser.register("type", bool, cast_to_bool)
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
 
     default_migrations = os.environ.get("MIGRATIONS", "")
     # detect configuration
@@ -90,7 +96,7 @@ def get_context(args):
         "--multi-statement",
         default=cast_to_bool(os.environ.get("MULTI_STATEMENT", "1")),
         action=argparse.BooleanOptionalAction,
-        help="Path to list of migration files",
+        help="Treat each migration file as multiple ';'-separated statements",
     )
     parser.add_argument(
         "--log-level",
@@ -186,5 +192,9 @@ def migrate(ctx) -> List[Migration]:
 
 
 def main() -> int:
-    migrate(get_context(sys.argv[1:]))  # pragma: no cover
-    return 0  # pragma: no cover
+    try:
+        migrate(get_context(sys.argv[1:]))
+    except MigrationException as exc:
+        logging.error("Migration failed: %s", exc)
+        return 1
+    return 0

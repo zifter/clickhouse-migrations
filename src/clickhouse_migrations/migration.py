@@ -2,7 +2,9 @@ import hashlib
 import os
 from collections import namedtuple
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
+
+from clickhouse_migrations.exceptions import MigrationException
 
 Migration = namedtuple("Migration", ["version", "md5", "script"])
 
@@ -12,21 +14,40 @@ class MigrationStorage:
         self.storage_dir: Path = Path(storage_dir)
 
     def filenames(self) -> List[Path]:
-        l: List[Path] = []
-        for f in os.scandir(self.storage_dir):
-            if f.name.endswith(".sql"):
-                l.append(self.storage_dir / f.name)
+        if not self.storage_dir.is_dir():
+            raise MigrationException(
+                f"Migrations directory does not exist: {self.storage_dir}"
+            )
 
-        return l
+        return [
+            self.storage_dir / f.name
+            for f in os.scandir(self.storage_dir)
+            if f.name.endswith(".sql")
+        ]
 
     def migrations(
         self, explicit_migrations: Optional[List[str]] = None
     ) -> List[Migration]:
         migrations: List[Migration] = []
+        seen_versions: Dict[int, str] = {}
 
         for full_path in self.filenames():
             version_string = full_path.name.split("_")[0]
-            version_number = int(version_string)
+            try:
+                version_number = int(version_string)
+            except ValueError as exc:
+                raise MigrationException(
+                    "Migration file name must start with a numeric version "
+                    f"followed by '_', got: {full_path.name}"
+                ) from exc
+
+            if version_number in seen_versions:
+                raise MigrationException(
+                    f"Duplicate migration version {version_number}: "
+                    f"{seen_versions[version_number]} and {full_path.name}"
+                )
+            seen_versions[version_number] = full_path.name
+
             migration = Migration(
                 version=version_number,
                 script=str(full_path.read_text(encoding="utf8")),

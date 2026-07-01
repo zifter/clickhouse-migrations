@@ -1,14 +1,31 @@
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 
 from clickhouse_driver import Client
 
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
+from clickhouse_migrations.util import quote_identifier
 
 MIGRATION_LOG_FORMAT_FULL = "full"
 MIGRATION_LOG_FORMAT_COMPACT = "compact"
 MIGRATION_LOG_FORMATS = (MIGRATION_LOG_FORMAT_FULL, MIGRATION_LOG_FORMAT_COMPACT)
+
+# Tokenizer used to split a script into statements without treating a ";" that
+# lives inside a string literal, quoted identifier or comment as a delimiter.
+_STATEMENT_TOKEN_RE = re.compile(
+    r"""
+      (?P<line_comment>--[^\n]*)
+    | (?P<block_comment>/\*.*?\*/)
+    | (?P<single>'(?:\\.|''|[^'])*')
+    | (?P<double>"(?:\\.|""|[^"])*")
+    | (?P<backtick>`(?:``|[^`])*`)
+    | (?P<semicolon>;)
+    | (?P<other>[^-/'"`;]+|.)
+    """,
+    re.VERBOSE | re.DOTALL,
+)
 
 
 class Migrator:
@@ -29,7 +46,15 @@ class Migrator:
         self._migration_log_format = migration_log_format
 
     def init_schema(self, cluster_name: Optional[str] = None):
-        cluster_schema = f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER "{cluster_name}" (
+        if cluster_name is None:
+            schema = """CREATE TABLE IF NOT EXISTS schema_versions (
+    version UInt32,
+    md5 String,
+    script String,
+    created_at DateTime DEFAULT now()
+) ENGINE = MergeTree ORDER BY tuple(created_at)"""
+        else:
+            schema = f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER {quote_identifier(cluster_name)} (
     version UInt32,
     md5 String,
     script String,
@@ -37,14 +62,7 @@ class Migrator:
 ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{database}}/{{table}}', '{{replica}}')
 ORDER BY tuple(created_at)"""
 
-        single_schema = """CREATE TABLE IF NOT EXISTS schema_versions (
-    version UInt32,
-    md5 String,
-    script String,
-    created_at DateTime DEFAULT now()
-) ENGINE = MergeTree ORDER BY tuple(created_at)"""
-
-        self._execute(single_schema if cluster_name is None else cluster_schema)
+        self._execute(schema)
 
     def query_applied_migrations(self) -> List[Migration]:
         self.optimize_schema_table()
@@ -194,13 +212,22 @@ ORDER BY tuple(created_at)"""
 
     @classmethod
     def script_to_statements(cls, script: str, multi_statement: bool) -> List[str]:
-        statements = []
-        if multi_statement:
-            for statement in script.split(";"):
-                statement = statement.strip()
+        if not multi_statement:
+            return [script.strip()]
+
+        statements: List[str] = []
+        current: List[str] = []
+        for match in _STATEMENT_TOKEN_RE.finditer(script):
+            if match.lastgroup == "semicolon":
+                statement = "".join(current).strip()
                 if statement:
                     statements.append(statement + ";")
-        else:
-            statements.append(script.strip())
+                current = []
+            else:
+                current.append(match.group())
+
+        statement = "".join(current).strip()
+        if statement:
+            statements.append(statement + ";")
 
         return statements

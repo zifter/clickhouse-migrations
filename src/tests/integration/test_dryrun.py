@@ -3,7 +3,7 @@ from pathlib import Path
 
 from clickhouse_migrations.migration import MigrationStorage
 
-TESTS_DIR = Path(__file__).parent
+TESTS_DIR = Path(__file__).parents[1]
 MIGRATIONS = MigrationStorage(TESTS_DIR / "migrations").migrations()
 
 

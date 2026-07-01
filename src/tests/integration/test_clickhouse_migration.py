@@ -16,7 +16,7 @@ from clickhouse_migrations.command_line import (
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
 
-TESTS_DIR = Path(__file__).parent
+TESTS_DIR = Path(__file__).parents[1]
 
 
 def test_empty_list_of_migrations_ok(cluster: ClickhouseCluster):
