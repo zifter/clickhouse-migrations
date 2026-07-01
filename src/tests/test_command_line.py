@@ -122,6 +122,11 @@ def test_check_migration_log_format_env_ok(monkeypatch):
     assert context.migration_log_format == "compact"
 
 
+def test_check_migration_log_format_invalid_rejected():
+    with pytest.raises(SystemExit):
+        get_context(["--migration-log-format", "bogus"])
+
+
 def test_version_flag_prints_version_and_exits(capsys):
     with pytest.raises(SystemExit) as exc_info:
         get_context(["--version"])
