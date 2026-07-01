@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a problem with clickhouse-migrations
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a bug! Please fill in the details below.
+  - type: input
+    id: version
+    attributes:
+      label: clickhouse-migrations version
+      placeholder: e.g. 0.11.0
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: e.g. 3.12
+    validations:
+      required: true
+  - type: input
+    id: clickhouse-version
+    attributes:
+      label: ClickHouse version
+      placeholder: e.g. 24.3
+    validations:
+      required: false
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Single node
+        - Cluster
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration file(s) / command
+      description: The migration SQL and/or the command or code you ran.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / traceback
+      render: shell
+    validations:
+      required: false

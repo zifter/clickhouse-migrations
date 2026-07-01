@@ -14,6 +14,14 @@ requires-python = ">=3.9, <4"
 keywords = [
     "clickhouse",
     "migrations",
+    "migration",
+    "database",
+    "database-migration",
+    "schema-migration",
+    "sql",
+    "ddl",
+    "olap",
+    "cli",
 ]
 license = {text = "MIT"}
 classifiers = [

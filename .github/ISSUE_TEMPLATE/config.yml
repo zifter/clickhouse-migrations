@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Usage help / documentation
+    url: https://github.com/zifter/clickhouse-migrations#usage
+    about: Check the README usage section and existing issues before opening a new one.
