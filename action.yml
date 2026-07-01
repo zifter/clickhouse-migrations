@@ -1,0 +1,95 @@
+name: "ClickHouse Migrations"
+description: "Apply file-based schema migrations to ClickHouse from a directory of .sql files."
+branding:
+  icon: "database"
+  color: "yellow"
+
+inputs:
+  migrations-dir:
+    description: "Path to the directory with migration files"
+    required: false
+    default: "./migrations"
+  db-url:
+    description: "ClickHouse connection URL (clickhouse://user:password@host:port/db). Takes precedence over the individual db-* inputs."
+    required: false
+    default: ""
+  db-host:
+    description: "ClickHouse host"
+    required: false
+    default: "localhost"
+  db-port:
+    description: "ClickHouse native port"
+    required: false
+    default: "9000"
+  db-user:
+    description: "ClickHouse user"
+    required: false
+    default: "default"
+  db-password:
+    description: "ClickHouse password"
+    required: false
+    default: ""
+  db-name:
+    description: "ClickHouse database name"
+    required: false
+    default: ""
+  cluster-name:
+    description: "ClickHouse cluster name (for ON CLUSTER / replicated deployments)"
+    required: false
+    default: ""
+  extra-args:
+    description: "Additional raw CLI arguments, e.g. '--dry-run --secure --create-db-if-not-exists'"
+    required: false
+    default: ""
+  version:
+    description: "Version of clickhouse-migrations to install from PyPI (defaults to the latest)"
+    required: false
+    default: ""
+  python-version:
+    description: "Python version used to run the tool"
+    required: false
+    default: "3.13"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install clickhouse-migrations
+      shell: bash
+      env:
+        CHM_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ -n "$CHM_VERSION" ]; then
+          pip install "clickhouse-migrations==$CHM_VERSION"
+        else
+          pip install clickhouse-migrations
+        fi
+
+    - name: Apply migrations
+      shell: bash
+      env:
+        CHM_MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+        CHM_DB_URL: ${{ inputs.db-url }}
+        CHM_DB_HOST: ${{ inputs.db-host }}
+        CHM_DB_PORT: ${{ inputs.db-port }}
+        CHM_DB_USER: ${{ inputs.db-user }}
+        CHM_DB_PASSWORD: ${{ inputs.db-password }}
+        CHM_DB_NAME: ${{ inputs.db-name }}
+        CHM_CLUSTER_NAME: ${{ inputs.cluster-name }}
+        CHM_EXTRA_ARGS: ${{ inputs.extra-args }}
+      run: |
+        set -euo pipefail
+        args=(--migrations-dir "$CHM_MIGRATIONS_DIR")
+        if [ -n "$CHM_DB_URL" ]; then
+          args+=(--db-url "$CHM_DB_URL")
+        else
+          args+=(--db-host "$CHM_DB_HOST" --db-port "$CHM_DB_PORT" --db-user "$CHM_DB_USER" --db-password "$CHM_DB_PASSWORD")
+        fi
+        if [ -n "$CHM_DB_NAME" ]; then args+=(--db-name "$CHM_DB_NAME"); fi
+        if [ -n "$CHM_CLUSTER_NAME" ]; then args+=(--cluster-name "$CHM_CLUSTER_NAME"); fi
+        clickhouse-migrations "${args[@]}" $CHM_EXTRA_ARGS

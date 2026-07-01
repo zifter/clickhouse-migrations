@@ -1,0 +1,15 @@
+.git
+.github
+.idea
+.tox
+.pytest_cache
+htmlcov
+dist
+build
+*.egg-info
+coverage.xml
+.coverage
+dev
+__pycache__
+*.pyc
+GROWTH.md

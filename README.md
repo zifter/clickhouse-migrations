@@ -132,6 +132,71 @@ Parameter | Description | Default
 `secure` | Use secure (TLS) connection | `False`
 `migration_log_format` | Migration log format `full` logs the full Migration object, `compact` logs only version and md5 | `full`
 
+### In CI (GitHub Action)
+
+Apply migrations from a GitHub workflow with the composite action:
+
+```yaml
+- uses: zifter/clickhouse-migrations@v1
+  with:
+    migrations-dir: ./migrations
+    db-host: localhost
+    db-port: "9000"
+    db-user: default
+    db-password: ${{ secrets.CLICKHOUSE_PASSWORD }}
+    db-name: mydb
+    # or connect via a single URL instead of the db-* inputs:
+    # db-url: ${{ secrets.CLICKHOUSE_URL }}
+    # any extra raw CLI flags:
+    # extra-args: --secure --create-db-if-not-exists
+```
+
+Inputs: `migrations-dir`, `db-url`, `db-host`, `db-port`, `db-user`, `db-password`, `db-name`, `cluster-name`, `extra-args`, `version` (pin the package version), `python-version`. You can also pin an exact release, e.g. `zifter/clickhouse-migrations@v0.12.0`.
+
+### With Docker
+
+An image is published to the GitHub Container Registry. Mount your migrations directory at `/migrations`:
+
+```bash
+docker run --rm \
+    -v "$PWD/migrations:/migrations" \
+    ghcr.io/zifter/clickhouse-migrations:latest \
+    --db-url clickhouse://default:secret@clickhouse:9000/mydb
+```
+
+Run migrations as a Kubernetes `Job`, e.g. before rolling out a deployment:
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: clickhouse-migrations
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrations
+          image: ghcr.io/zifter/clickhouse-migrations:latest
+          args: ["--create-db-if-not-exists"]
+          env:
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: clickhouse
+                  key: url
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: clickhouse-migrations
+```
+
+Migrations are provided here via a ConfigMap; alternatively bake them into your own image with `FROM ghcr.io/zifter/clickhouse-migrations`.
+
 ### Notes
 The ClickHouse driver does not natively support executing multiple statements in a single query.
 To allow for multiple statements in a single migration, you can use the `multi_statement` param.
