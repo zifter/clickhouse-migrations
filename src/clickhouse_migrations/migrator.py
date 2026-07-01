@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 
 from clickhouse_driver import Client
@@ -9,6 +10,21 @@ from clickhouse_migrations.migration import Migration
 MIGRATION_LOG_FORMAT_FULL = "full"
 MIGRATION_LOG_FORMAT_COMPACT = "compact"
 MIGRATION_LOG_FORMATS = (MIGRATION_LOG_FORMAT_FULL, MIGRATION_LOG_FORMAT_COMPACT)
+
+# Tokenizer used to split a script into statements without treating a ";" that
+# lives inside a string literal, quoted identifier or comment as a delimiter.
+_STATEMENT_TOKEN_RE = re.compile(
+    r"""
+      (?P<line_comment>--[^\n]*)
+    | (?P<block_comment>/\*.*?\*/)
+    | (?P<single>'(?:\\.|''|[^'])*')
+    | (?P<double>"(?:\\.|""|[^"])*")
+    | (?P<backtick>`(?:``|[^`])*`)
+    | (?P<semicolon>;)
+    | (?P<other>[^-/'"`;]+|.)
+    """,
+    re.VERBOSE | re.DOTALL,
+)
 
 
 class Migrator:
@@ -194,13 +210,22 @@ ORDER BY tuple(created_at)"""
 
     @classmethod
     def script_to_statements(cls, script: str, multi_statement: bool) -> List[str]:
-        statements = []
-        if multi_statement:
-            for statement in script.split(";"):
-                statement = statement.strip()
+        if not multi_statement:
+            return [script.strip()]
+
+        statements: List[str] = []
+        current: List[str] = []
+        for match in _STATEMENT_TOKEN_RE.finditer(script):
+            if match.lastgroup == "semicolon":
+                statement = "".join(current).strip()
                 if statement:
                     statements.append(statement + ";")
-        else:
-            statements.append(script.strip())
+                current = []
+            else:
+                current.append(match.group())
+
+        statement = "".join(current).strip()
+        if statement:
+            statements.append(statement + ";")
 
         return statements
