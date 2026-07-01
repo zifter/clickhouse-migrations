@@ -2,7 +2,7 @@ from pathlib import Path
 
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 
-TESTS_DIR = Path(__file__).parent
+TESTS_DIR = Path(__file__).parents[1]
 
 CLICKHOUSE_SERVERS = (
     "clickhouse01",
