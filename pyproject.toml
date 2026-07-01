@@ -49,9 +49,6 @@ packages = [
     "clickhouse_migrations"
 ]
 
-[tool.distutils.bdist_wheel]
-universal = true
-
 [tool.pytest.ini_options]
 markers = [
     "integration: tests that require a running ClickHouse instance",
