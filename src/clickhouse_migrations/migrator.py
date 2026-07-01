@@ -6,6 +6,7 @@ from clickhouse_driver import Client
 
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
+from clickhouse_migrations.util import quote_identifier
 
 MIGRATION_LOG_FORMAT_FULL = "full"
 MIGRATION_LOG_FORMAT_COMPACT = "compact"
@@ -45,7 +46,15 @@ class Migrator:
         self._migration_log_format = migration_log_format
 
     def init_schema(self, cluster_name: Optional[str] = None):
-        cluster_schema = f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER "{cluster_name}" (
+        if cluster_name is None:
+            schema = """CREATE TABLE IF NOT EXISTS schema_versions (
+    version UInt32,
+    md5 String,
+    script String,
+    created_at DateTime DEFAULT now()
+) ENGINE = MergeTree ORDER BY tuple(created_at)"""
+        else:
+            schema = f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER {quote_identifier(cluster_name)} (
     version UInt32,
     md5 String,
     script String,
@@ -53,14 +62,7 @@ class Migrator:
 ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{database}}/{{table}}', '{{replica}}')
 ORDER BY tuple(created_at)"""
 
-        single_schema = """CREATE TABLE IF NOT EXISTS schema_versions (
-    version UInt32,
-    md5 String,
-    script String,
-    created_at DateTime DEFAULT now()
-) ENGINE = MergeTree ORDER BY tuple(created_at)"""
-
-        self._execute(single_schema if cluster_name is None else cluster_schema)
+        self._execute(schema)
 
     def query_applied_migrations(self) -> List[Migration]:
         self.optimize_schema_table()

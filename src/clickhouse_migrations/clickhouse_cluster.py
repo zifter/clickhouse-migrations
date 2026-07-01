@@ -1,14 +1,16 @@
 from pathlib import Path
 from typing import List, Optional, Union
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from clickhouse_driver import Client
 
 from clickhouse_migrations.defaults import DB_HOST, DB_PASSWORD, DB_PORT, DB_USER
 from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import Migrator
+from clickhouse_migrations.util import quote_identifier
 
 
-class ClickhouseCluster:
+class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
     def __init__(
         self,
         db_host: str = DB_HOST,
@@ -17,33 +19,44 @@ class ClickhouseCluster:
         db_port: str = DB_PORT,
         db_url: Optional[str] = None,
         db_name: Optional[str] = None,
+        secure: bool = False,
         **kwargs,
     ):
-        self.db_url: Optional[str] = db_url
+        self.db_url: Optional[str] = None
         self.default_db_name: Optional[str] = db_name
+        self.secure: bool = secure
+        self.connection_kwargs = kwargs
+        self._parsed_url = None
 
         if db_url:
-            parts = self.db_url.split("/")
-            if len(parts) == 4:
-                self.default_db_name = parts[-1]
-                parts = parts[0:-1]
+            parsed = urlparse(db_url)
+            path_db = parsed.path.lstrip("/")
+            if path_db:
+                self.default_db_name = path_db
 
-            self.db_url = "/".join(parts)
+            query = dict(parse_qsl(parsed.query))
+            if secure:
+                query.setdefault("secure", "true")
+
+            # Keep the base URL without a database in the path; connection()
+            # re-adds the database as a proper path segment so it never lands
+            # after the query string.
+            self._parsed_url = parsed._replace(path="", query=urlencode(query))
+            self.db_url = urlunparse(self._parsed_url)
         else:
             self.db_host = db_host
             self.db_port = db_port
             self.db_user = db_user
             self.db_password = db_password
-            self.connection_kwargs = kwargs
 
     def connection(self, db_name: Optional[str] = None) -> Client:
         db_name = db_name if db_name is not None else self.default_db_name
 
-        if self.db_url:
-            db_url = self.db_url
+        if self._parsed_url is not None:
+            parsed = self._parsed_url
             if db_name:
-                db_url = db_url + "/" + db_name
-            ch_client = Client.from_url(db_url)
+                parsed = parsed._replace(path="/" + db_name)
+            ch_client = Client.from_url(urlunparse(parsed))
         else:
             ch_client = Client(
                 self.db_host,
@@ -51,6 +64,7 @@ class ClickhouseCluster:
                 user=self.db_user,
                 password=self.db_password,
                 database=db_name,
+                secure=self.secure,
                 **self.connection_kwargs,
             )
         return ch_client
@@ -62,10 +76,13 @@ class ClickhouseCluster:
 
         with self.connection("") as conn:
             if cluster_name is None:
-                conn.execute(f'CREATE DATABASE IF NOT EXISTS "{db_name}"')
+                conn.execute(
+                    f"CREATE DATABASE IF NOT EXISTS {quote_identifier(db_name)}"
+                )
             else:
                 conn.execute(
-                    f'CREATE DATABASE IF NOT EXISTS "{db_name}" ON CLUSTER "{cluster_name}"'
+                    f"CREATE DATABASE IF NOT EXISTS {quote_identifier(db_name)} "
+                    f"ON CLUSTER {quote_identifier(cluster_name)}"
                 )
 
     def init_schema(
