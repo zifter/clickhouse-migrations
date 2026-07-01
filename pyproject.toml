@@ -36,12 +36,14 @@ optional-dependencies.testing = [
 dynamic =["version", "readme"]
 
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.dynamic]
 readme = {file = ["README.md"], content-type = "text/markdown"}
-version = {attr = "clickhouse_migrations.__version__"}
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
 
 [tool.setuptools]
 package-dir = { "clickhouse_migrations" = "src/clickhouse_migrations", "tests" = "src/tests" }
@@ -54,9 +56,6 @@ universal = true
 
 [tool.isort]
 profile = "black"
-
-[tool.hatch.version]
-source = "vcs"
 
 [project.scripts]
 clickhouse-migrations = "clickhouse_migrations.command_line:main"
