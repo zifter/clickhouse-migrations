@@ -141,6 +141,13 @@ def test_version_flag_prints_version_and_exits(capsys):
     assert __version__ in capsys.readouterr().out
 
 
+def test_version_subcommand(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["clickhouse-migrations", "version"])
+
+    assert main() == 0
+    assert __version__ in capsys.readouterr().out
+
+
 def test_main_returns_zero_on_success(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["clickhouse-migrations"])
     monkeypatch.setattr(command_line, "migrate", lambda ctx: [])

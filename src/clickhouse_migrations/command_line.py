@@ -46,7 +46,7 @@ def cast_to_bool(value: str):
     return value.lower() in ("1", "true", "yes", "y")
 
 
-SUBCOMMANDS = ("migrate", "status")
+SUBCOMMANDS = ("migrate", "status", "version")
 
 
 def _add_common_arguments(parser):
@@ -168,6 +168,8 @@ def get_context(args):
     )
     _add_common_arguments(status_parser)
 
+    subparsers.add_parser("version", help="Show the version and exit")
+
     # Default to the "migrate" subcommand so existing invocations
     # (clickhouse-migrations <flags>) keep working unchanged.
     args = list(args)
@@ -258,6 +260,9 @@ def show_status(ctx) -> List[StatusRow]:
 
 def main() -> int:
     ctx = get_context(sys.argv[1:])
+    if ctx.command == "version":
+        print(f"clickhouse-migrations {__version__}")
+        return 0
     try:
         if ctx.command == "status":
             show_status(ctx)
