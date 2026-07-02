@@ -179,6 +179,13 @@ def test_status_subcommand():
     assert context.db_name == "x"
 
 
+def test_driver_default_and_override():
+    assert get_context([]).driver == "clickhouse-driver"
+    assert (
+        get_context(["--driver", "clickhouse-connect"]).driver == "clickhouse-connect"
+    )
+
+
 def test_format_status_empty():
     assert format_status([]) == "No migrations found."
 

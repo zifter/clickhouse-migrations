@@ -4,8 +4,17 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from clickhouse_driver import Client
 
-from clickhouse_migrations.connection import ClickhouseDriverConnection, Connection
-from clickhouse_migrations.defaults import DB_HOST, DB_PASSWORD, DB_PORT, DB_USER
+from clickhouse_migrations.connection import (
+    CLICKHOUSE_CONNECT,
+    CLICKHOUSE_DRIVER,
+    DEFAULT_PORT,
+    ClickhouseConnectConnection,
+    ClickhouseDriverConnection,
+    Connection,
+    import_clickhouse_connect,
+)
+from clickhouse_migrations.defaults import DB_HOST, DB_PASSWORD, DB_USER
+from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import STATUS_PENDING, Migrator, StatusRow
 from clickhouse_migrations.util import quote_identifier, quote_string
@@ -17,19 +26,26 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         db_host: str = DB_HOST,
         db_user: str = DB_USER,
         db_password: str = DB_PASSWORD,
-        db_port: str = DB_PORT,
+        db_port: Optional[str] = None,
         db_url: Optional[str] = None,
         db_name: Optional[str] = None,
         secure: bool = False,
+        driver: str = CLICKHOUSE_DRIVER,
         **kwargs,
     ):
         self.db_url: Optional[str] = None
         self.default_db_name: Optional[str] = db_name
         self.secure: bool = secure
+        self.driver: str = driver
         self.connection_kwargs = kwargs
         self._parsed_url = None
 
         if db_url:
+            if driver != CLICKHOUSE_DRIVER:
+                raise MigrationException(
+                    "db_url is only supported with the clickhouse-driver driver; "
+                    "use db_host/db_port with clickhouse-connect"
+                )
             parsed = urlparse(db_url)
             path_db = parsed.path.lstrip("/")
             if path_db:
@@ -50,8 +66,25 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             self.db_user = db_user
             self.db_password = db_password
 
+    def _resolved_port(self):
+        if self.db_port is not None:
+            return self.db_port
+        return DEFAULT_PORT[self.driver]
+
     def connection(self, db_name: Optional[str] = None) -> Connection:
         db_name = db_name if db_name is not None else self.default_db_name
+
+        if self.driver == CLICKHOUSE_CONNECT:
+            clickhouse_connect = import_clickhouse_connect()
+            client = clickhouse_connect.get_client(
+                host=self.db_host,
+                port=int(self._resolved_port()),
+                username=self.db_user,
+                password=self.db_password,
+                database=db_name or None,
+                secure=self.secure,
+            )
+            return ClickhouseConnectConnection(client)
 
         if self._parsed_url is not None:
             parsed = self._parsed_url
@@ -61,7 +94,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         else:
             ch_client = Client(
                 self.db_host,
-                port=self.db_port,
+                port=self._resolved_port(),
                 user=self.db_user,
                 password=self.db_password,
                 database=db_name,

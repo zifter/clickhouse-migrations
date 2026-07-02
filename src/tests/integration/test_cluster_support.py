@@ -45,13 +45,13 @@ def test_migration_with_replicated_schema(_schema):
     with cluster.connection("pytest") as conn:
         for server in CLICKHOUSE_SERVERS:
             assert (
-                conn.execute(
+                conn.execute(  # pylint: disable=no-member
                     f"select count(*) from remote('{server}', 'pytest.schema_versions')"
                 )[0][0]
                 == 1
             )
             result_set.append(
-                conn.execute(
+                conn.execute(  # pylint: disable=no-member
                     f"select * from remote('{server}', 'pytest.schema_versions')"
                 )[0]
             )
