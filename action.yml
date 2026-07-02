@@ -18,9 +18,9 @@ inputs:
     required: false
     default: "localhost"
   db-port:
-    description: "ClickHouse native port"
+    description: "ClickHouse port. Leave empty to use the driver default (9000 for clickhouse-driver, 8123 for clickhouse-connect)."
     required: false
-    default: "9000"
+    default: ""
   db-user:
     description: "ClickHouse user"
     required: false
@@ -37,6 +37,10 @@ inputs:
     description: "ClickHouse cluster name (for ON CLUSTER / replicated deployments)"
     required: false
     default: ""
+  driver:
+    description: "ClickHouse driver: 'clickhouse-driver' (native TCP) or 'clickhouse-connect' (official HTTP). Both are bundled; db-url is clickhouse-driver only."
+    required: false
+    default: "clickhouse-driver"
   extra-args:
     description: "Additional raw CLI arguments, e.g. '--dry-run --secure --create-db-if-not-exists'"
     required: false
@@ -65,9 +69,9 @@ runs:
       run: |
         set -euo pipefail
         if [ -n "$CHM_VERSION" ]; then
-          pip install "clickhouse-migrations==$CHM_VERSION"
+          pip install "clickhouse-migrations[connect]==$CHM_VERSION"
         else
-          pip install clickhouse-migrations
+          pip install "clickhouse-migrations[connect]"
         fi
 
     - name: Apply migrations
@@ -81,14 +85,17 @@ runs:
         CHM_DB_PASSWORD: ${{ inputs.db-password }}
         CHM_DB_NAME: ${{ inputs.db-name }}
         CHM_CLUSTER_NAME: ${{ inputs.cluster-name }}
+        CHM_DRIVER: ${{ inputs.driver }}
         CHM_EXTRA_ARGS: ${{ inputs.extra-args }}
       run: |
         set -euo pipefail
-        args=(--migrations-dir "$CHM_MIGRATIONS_DIR")
+        args=(--migrations-dir "$CHM_MIGRATIONS_DIR" --driver "$CHM_DRIVER")
         if [ -n "$CHM_DB_URL" ]; then
           args+=(--db-url "$CHM_DB_URL")
         else
-          args+=(--db-host "$CHM_DB_HOST" --db-port "$CHM_DB_PORT" --db-user "$CHM_DB_USER" --db-password "$CHM_DB_PASSWORD")
+          args+=(--db-host "$CHM_DB_HOST" --db-user "$CHM_DB_USER" --db-password "$CHM_DB_PASSWORD")
+          # Omit --db-port when empty so the tool applies the driver default (9000 / 8123).
+          if [ -n "$CHM_DB_PORT" ]; then args+=(--db-port "$CHM_DB_PORT"); fi
         fi
         if [ -n "$CHM_DB_NAME" ]; then args+=(--db-name "$CHM_DB_NAME"); fi
         if [ -n "$CHM_CLUSTER_NAME" ]; then args+=(--cluster-name "$CHM_CLUSTER_NAME"); fi
