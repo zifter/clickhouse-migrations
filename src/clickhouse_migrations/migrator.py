@@ -3,8 +3,7 @@ import re
 from collections import namedtuple
 from typing import Dict, List, Optional, Tuple
 
-from clickhouse_driver import Client
-
+from clickhouse_migrations.connection import Connection
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
 from clickhouse_migrations.util import quote_identifier
@@ -41,7 +40,7 @@ _STATEMENT_TOKEN_RE = re.compile(
 class Migrator:
     def __init__(
         self,
-        conn: Client,
+        conn: Connection,
         dryrun: bool = False,
         migration_log_format: str = MIGRATION_LOG_FORMAT_FULL,
     ):
@@ -51,7 +50,7 @@ class Migrator:
                 f"Expected one of: {', '.join(MIGRATION_LOG_FORMATS)}"
             )
 
-        self._conn: Client = conn
+        self._conn: Connection = conn
         self._dryrun = dryrun
         self._migration_log_format = migration_log_format
 
@@ -72,7 +71,7 @@ class Migrator:
 ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{database}}/{{table}}', '{{replica}}')
 ORDER BY tuple(created_at)"""
 
-        self._execute(schema)
+        self._conn.command(schema)
 
     def query_applied_migrations(self) -> List[Migration]:
         self.optimize_schema_table()
@@ -84,12 +83,7 @@ ORDER BY tuple(created_at)"""
         FROM schema_versions
         ORDER BY version"""
 
-        result = self._execute(query, with_column_types=True)
-        column_names = [c[0] for c in result[len(result) - 1]]
-
-        migrations_as_dict = [dict(zip(column_names, d)) for d in result[0]]
-
-        return [Migration(**d) for d in migrations_as_dict]
+        return [Migration(**row) for row in self._conn.query(query)]
 
     def migrations_to_apply(self, incoming: List[Migration]) -> List[Migration]:
         applied = self.query_applied_migrations()
@@ -140,11 +134,12 @@ ORDER BY tuple(created_at)"""
         return self._build_status(incoming, self._query_applied_meta())
 
     def _query_applied_meta(self) -> Dict[int, Tuple[str, object]]:
-        result = self._execute(
-            "SELECT version, argMax(md5, created_at), max(created_at) "
+        rows = self._conn.query(
+            "SELECT version, argMax(md5, created_at) AS md5, "
+            "max(created_at) AS applied_at "
             "FROM schema_versions GROUP BY version ORDER BY version"
         )
-        return {row[0]: (row[1], row[2]) for row in result}
+        return {row["version"]: (row["md5"], row["applied_at"]) for row in rows}
 
     @staticmethod
     def _build_status(
@@ -206,54 +201,42 @@ ORDER BY tuple(created_at)"""
                 elif self._dryrun:
                     logging.info("Dry run mode, would have executed: %s", statement)
                 else:
-                    self._execute(statement)
+                    self._conn.command(statement)
 
             logging.info("Migration applied, need to update schema version table.")
             if fake:
                 logging.debug("update schema versions because fake option is enabled")
-                self._execute(
-                    "ALTER TABLE schema_versions DELETE WHERE version = %(version)s;",
-                    {
-                        "version": migration.version,
-                    },
+                self._conn.command(
+                    "ALTER TABLE schema_versions "
+                    f"DELETE WHERE version = {int(migration.version)}"
                 )
-                self._execute(
-                    "INSERT INTO schema_versions(version, script, md5) VALUES",
-                    [
-                        {
-                            "version": migration.version,
-                            "script": migration.script,
-                            "md5": migration.md5,
-                        }
-                    ],
-                )
+                self._insert_schema_version(migration)
             elif self._dryrun:
                 logging.debug(
                     "Skip updating schema versions because dry run is enabled"
                 )
             else:
                 logging.debug("Insert new schemas")
-                self._execute(
-                    "INSERT INTO schema_versions(version, script, md5) VALUES",
-                    [
-                        {
-                            "version": migration.version,
-                            "script": migration.script,
-                            "md5": migration.md5,
-                        }
-                    ],
-                )
+                self._insert_schema_version(migration)
 
             logging.info("Migration is fully applied.")
 
         return migrations_to_process
 
-    def optimize_schema_table(self):
-        self._execute("OPTIMIZE TABLE schema_versions FINAL;")
+    def _insert_schema_version(self, migration: Migration) -> None:
+        self._conn.insert(
+            "schema_versions",
+            [
+                {
+                    "version": migration.version,
+                    "script": migration.script,
+                    "md5": migration.md5,
+                }
+            ],
+        )
 
-    def _execute(self, statement, *args, **kwargs):
-        logging.debug(statement)
-        return self._conn.execute(statement, *args, **kwargs)
+    def optimize_schema_table(self):
+        self._conn.command("OPTIMIZE TABLE schema_versions FINAL")
 
     @classmethod
     def script_to_statements(cls, script: str, multi_statement: bool) -> List[str]:

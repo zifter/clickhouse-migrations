@@ -4,10 +4,11 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from clickhouse_driver import Client
 
+from clickhouse_migrations.connection import ClickhouseDriverConnection, Connection
 from clickhouse_migrations.defaults import DB_HOST, DB_PASSWORD, DB_PORT, DB_USER
 from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import STATUS_PENDING, Migrator, StatusRow
-from clickhouse_migrations.util import quote_identifier
+from clickhouse_migrations.util import quote_identifier, quote_string
 
 
 class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
@@ -49,7 +50,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             self.db_user = db_user
             self.db_password = db_password
 
-    def connection(self, db_name: Optional[str] = None) -> Client:
+    def connection(self, db_name: Optional[str] = None) -> Connection:
         db_name = db_name if db_name is not None else self.default_db_name
 
         if self._parsed_url is not None:
@@ -67,7 +68,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
                 secure=self.secure,
                 **self.connection_kwargs,
             )
-        return ch_client
+        return ClickhouseDriverConnection(ch_client)
 
     def create_db(
         self, db_name: Optional[str] = None, cluster_name: Optional[str] = None
@@ -76,11 +77,11 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
 
         with self.connection("") as conn:
             if cluster_name is None:
-                conn.execute(
+                conn.command(
                     f"CREATE DATABASE IF NOT EXISTS {quote_identifier(db_name)}"
                 )
             else:
-                conn.execute(
+                conn.command(
                     f"CREATE DATABASE IF NOT EXISTS {quote_identifier(db_name)} "
                     f"ON CLUSTER {quote_identifier(cluster_name)}"
                 )
@@ -98,8 +99,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         db_name = db_name if db_name is not None else self.default_db_name
 
         with self.connection(db_name) as conn:
-            result = conn.execute("show tables")
-            return [t[0] for t in result]
+            return [row["name"] for row in conn.query("SHOW TABLES")]
 
     def migrate(
         self,
@@ -143,11 +143,10 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         # Read-only: never create the database or the schema table. If the
         # schema table is missing, nothing has been applied yet.
         with self.connection("") as conn:
-            initialized = conn.execute(
-                "SELECT count() FROM system.tables "
-                "WHERE database = %(db)s AND name = 'schema_versions'",
-                {"db": db_name},
-            )[0][0]
+            initialized = conn.query(
+                "SELECT count() AS n FROM system.tables "
+                f"WHERE database = {quote_string(db_name)} AND name = 'schema_versions'"
+            )[0]["n"]
 
         if not initialized:
             return [StatusRow(m.version, STATUS_PENDING, m.md5, None) for m in incoming]
