@@ -12,6 +12,8 @@ Python library for creating and applying migrations in ClickHouse database.
 Development and Maintenance of large-scale db systems many times requires constant changes to the actual DB system.
 Holding off the scripts to migrate these will be painful.
 
+📖 **Background:** [Managing ClickHouse migrations in production](https://medium.com/@zifter/managing-clickhouse-migrations-in-production-cluster-support-and-multi-statement-files-07d46c1de275) — why this tool exists, cluster support, and multi-statement migration files.
+
 ## Features:
 * Supports multi statements - more than one query per migration file.
 * Allow running migrations out-of-box
