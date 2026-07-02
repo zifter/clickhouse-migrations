@@ -1,25 +1,34 @@
 [![ci](https://github.com/zifter/clickhouse-migrations/actions/workflows/ci.yaml/badge.svg)](https://github.com/zifter/clickhouse-migrations/actions/workflows/ci.yaml)
 [![codecov](https://codecov.io/gh/zifter/clickhouse-migrations/branch/main/graph/badge.svg)](https://codecov.io/gh/zifter/clickhouse-migrations)
 [![release](https://img.shields.io/github/release/zifter/clickhouse-migrations.svg)](https://github.com/zifter/clickhouse-migrations/releases)
-[![PyPI version](https://badge.fury.io/py/clickhouse-migrations.svg)]([https://badge.fury.io/py/clickhouse-migrate](https://pypi.org/project/clickhouse-migrations/))
+[![PyPI version](https://badge.fury.io/py/clickhouse-migrations.svg)](https://pypi.org/project/clickhouse-migrations/)
 [![supported versions](https://img.shields.io/pypi/pyversions/clickhouse-migrations.svg)](https://pypi.org/project/clickhouse-migrations/)
 [![downloads](https://img.shields.io/pypi/dm/clickhouse-migrations.svg)](https://pypi.org/project/clickhouse-migrations/)
+[![GitHub stars](https://img.shields.io/github/stars/zifter/clickhouse-migrations.svg)](https://github.com/zifter/clickhouse-migrations/stargazers)
 [![my site](https://img.shields.io/badge/site-my%20blog-yellow.svg)](https://zifter.github.io/)
 
-# Clickhouse Migrations
+# ClickHouse Migrations
 
-Python library for creating and applying migrations in ClickHouse database.
+**Simple, file-based schema migrations for ClickHouse** — the most actively maintained ClickHouse migration tool for Python. Write plain `.sql` files, apply them from the CLI, your code, CI, or Docker. Cluster-aware, with support for both the native [`clickhouse-driver`](https://github.com/mymarilyn/clickhouse-driver) and the official [`clickhouse-connect`](https://github.com/ClickHouse/clickhouse-connect) driver.
 
-Development and Maintenance of large-scale db systems many times requires constant changes to the actual DB system.
-Holding off the scripts to migrate these will be painful.
+## Quick start
+
+```bash
+pip install clickhouse-migrations
+
+# put versioned .sql files in ./migrations (e.g. 001_init.sql), then apply them:
+clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migrations
+```
 
 📖 **Background:** [Managing ClickHouse migrations in production](https://medium.com/@zifter/managing-clickhouse-migrations-in-production-cluster-support-and-multi-statement-files-07d46c1de275) — why this tool exists, cluster support, and multi-statement migration files.
 
-## Features:
-* Supports multi statements - more than one query per migration file.
-* Allow running migrations out-of-box
-* Simple file migrations format: {VERSION}_{name}.sql
-* Supports Cluster deployments, makes sure that migrations state is consistent on all cluster nodes
+## Features
+* **Multi-statement migrations** — more than one query per `.sql` file
+* **Cluster-aware** — keeps migration state consistent across all cluster nodes
+* **Zero-config file format** — `{VERSION}_{name}.sql`, applied in order
+* **Run anywhere** — CLI, Python API, [GitHub Action](#in-ci-github-action), or [Docker image](#with-docker)
+* **Two drivers** — native `clickhouse-driver` (TCP) or official `clickhouse-connect` (HTTP)
+* **Inspect before you apply** — [`status`](#migration-status) and `--dry-run` show applied vs pending migrations without touching data
 
 ## Known alternatives
 This package originally forked from [clickhouse-migrator](https://github.com/delium/clickhouse-migrator).

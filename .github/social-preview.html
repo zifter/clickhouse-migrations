@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 78% 18%, #23232b 0%, #17171b 55%, #0f0f12 100%);
+    color: #f5f5f7;
+    position: relative;
+  }
+  .frame { position: absolute; inset: 0; padding: 84px 88px; display: flex; flex-direction: column; }
+  .kicker {
+    font-size: 22px; font-weight: 700; letter-spacing: 0.32em;
+    color: #ffcf3f; text-transform: uppercase;
+  }
+  h1 { font-size: 104px; font-weight: 800; line-height: 0.98; margin-top: 26px; letter-spacing: -0.02em; }
+  h1 .accent { color: #ffcf3f; }
+  .subtitle { font-size: 33px; font-weight: 500; color: #b8b8c2; margin-top: 30px; max-width: 900px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 40px; }
+  .chip {
+    font-size: 24px; font-weight: 600; color: #e6e6ec;
+    background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 999px; padding: 12px 24px;
+  }
+  .footer {
+    margin-top: auto; display: flex; align-items: center; justify-content: space-between;
+    border-top: 1px solid rgba(255,255,255,0.1); padding-top: 30px;
+  }
+  .cmd {
+    font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 27px; color: #ffcf3f;
+  }
+  .cmd .prompt { color: #6f6f7a; }
+  .repo { font-size: 24px; color: #8f8f9c; font-weight: 600; }
+  .bars { position: absolute; top: 88px; right: 92px; display: flex; gap: 15px; align-items: flex-end; }
+  .bars span { width: 22px; background: #ffcf3f; border-radius: 4px; }
+  .bars span:nth-child(1){ height: 92px; }
+  .bars span:nth-child(2){ height: 130px; }
+  .bars span:nth-child(3){ height: 70px; }
+  .bars span:nth-child(4){ height: 112px; }
+  .bars .dot { width: 22px; height: 22px; border-radius: 50%; background: #ff5a4d; }
+</style>
+</head>
+<body>
+  <div class="bars"><span></span><span></span><span></span><span></span><span class="dot"></span></div>
+  <div class="frame">
+    <div class="kicker">Python&nbsp;&nbsp;·&nbsp;&nbsp;CLI&nbsp;&nbsp;·&nbsp;&nbsp;CI/CD</div>
+    <h1><span class="accent">ClickHouse</span><br>Migrations</h1>
+    <div class="subtitle">Simple, file-based schema migrations for ClickHouse — the most actively maintained one for Python.</div>
+    <div class="chips">
+      <div class="chip">Multi-statement</div>
+      <div class="chip">Cluster-aware</div>
+      <div class="chip">GitHub Action</div>
+      <div class="chip">Docker</div>
+      <div class="chip">Two drivers</div>
+    </div>
+    <div class="footer">
+      <div class="cmd"><span class="prompt">$ </span>pip install clickhouse-migrations</div>
+      <div class="repo">github.com/zifter/clickhouse-migrations</div>
+    </div>
+  </div>
+</body>
+</html>
