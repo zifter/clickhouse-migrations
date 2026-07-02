@@ -37,3 +37,12 @@ def test_valid_log_levels(good_input, expected):
 def test_invalid_log_levels(bad_input):
     with pytest.raises(ValueError):
         log_level(bad_input)
+
+
+def test_log_level_fallback_without_getlevelnamesmapping(monkeypatch):
+    # Force the pre-3.11 code path (no logging.getLevelNamesMapping).
+    monkeypatch.delattr(logging, "getLevelNamesMapping", raising=False)
+
+    assert log_level("warning") == "WARNING"
+    with pytest.raises(ValueError):
+        log_level("not-a-level")
