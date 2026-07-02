@@ -3,7 +3,13 @@ from pathlib import Path
 import pytest
 
 from clickhouse_migrations.migration import Migration
-from clickhouse_migrations.migrator import Migrator
+from clickhouse_migrations.migrator import (
+    STATUS_APPLIED,
+    STATUS_MD5_MISMATCH,
+    STATUS_PENDING,
+    STATUS_UNKNOWN,
+    Migrator,
+)
 
 FIXTURES_DIR = Path(__file__).parent
 
@@ -151,3 +157,32 @@ def test_compact_migration_log_format_does_not_include_script():
 def test_unknown_migration_log_format_raises_error():
     with pytest.raises(ValueError):
         Migrator(None, migration_log_format="unknown")
+
+
+def test_build_status_classifies_every_state():
+    incoming = [
+        Migration(version=1, md5="a", script="s1"),  # applied
+        Migration(version=2, md5="b", script="s2"),  # pending
+        Migration(version=3, md5="c", script="s3"),  # md5 mismatch
+    ]
+    applied = {
+        1: ("a", "2024-01-01 00:00:00"),
+        3: ("different", "2024-01-03 00:00:00"),
+        4: ("d", "2024-01-04 00:00:00"),  # applied but not known locally
+    }
+
+    rows = Migrator._build_status(incoming, applied)  # pylint: disable=protected-access
+    by_version = {r.version: r for r in rows}
+
+    assert [r.version for r in rows] == [1, 2, 3, 4]
+    assert by_version[1].state == STATUS_APPLIED
+    assert by_version[1].applied_at == "2024-01-01 00:00:00"
+    assert by_version[2].state == STATUS_PENDING
+    assert by_version[2].applied_at is None
+    assert by_version[3].state == STATUS_MD5_MISMATCH
+    assert by_version[4].state == STATUS_UNKNOWN
+
+
+def test_build_status_empty():
+    # pylint: disable=protected-access
+    assert not Migrator._build_status([], {})

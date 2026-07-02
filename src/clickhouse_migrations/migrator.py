@@ -1,5 +1,6 @@
 import logging
 import re
+from collections import namedtuple
 from typing import Dict, List, Optional, Tuple
 
 from clickhouse_driver import Client
@@ -11,6 +12,15 @@ from clickhouse_migrations.util import quote_identifier
 MIGRATION_LOG_FORMAT_FULL = "full"
 MIGRATION_LOG_FORMAT_COMPACT = "compact"
 MIGRATION_LOG_FORMATS = (MIGRATION_LOG_FORMAT_FULL, MIGRATION_LOG_FORMAT_COMPACT)
+
+STATUS_APPLIED = "applied"
+STATUS_PENDING = "pending"
+STATUS_MD5_MISMATCH = "md5-mismatch"
+STATUS_UNKNOWN = "unknown"
+
+# One row of a migration status report. state is one of the STATUS_* values;
+# applied_at is None for migrations that have not been applied yet.
+StatusRow = namedtuple("StatusRow", ["version", "state", "md5", "applied_at"])
 
 # Tokenizer used to split a script into statements without treating a ";" that
 # lives inside a string literal, quoted identifier or comment as a delimiter.
@@ -125,6 +135,41 @@ ORDER BY tuple(created_at)"""
             left for left, right in joined_migrations.values() if left and not right
         ]
         return sorted(to_apply, key=lambda x: x.version)
+
+    def migration_status(self, incoming: List[Migration]) -> List[StatusRow]:
+        return self._build_status(incoming, self._query_applied_meta())
+
+    def _query_applied_meta(self) -> Dict[int, Tuple[str, object]]:
+        result = self._execute(
+            "SELECT version, argMax(md5, created_at), max(created_at) "
+            "FROM schema_versions GROUP BY version ORDER BY version"
+        )
+        return {row[0]: (row[1], row[2]) for row in result}
+
+    @staticmethod
+    def _build_status(
+        incoming: List[Migration], applied: Dict[int, Tuple[str, object]]
+    ) -> List[StatusRow]:
+        incoming_by_version = {m.version: m for m in incoming}
+
+        rows: List[StatusRow] = []
+        for version in sorted(set(incoming_by_version) | set(applied)):
+            local = incoming_by_version.get(version)
+            applied_meta = applied.get(version)
+
+            if local and applied_meta:
+                applied_md5, applied_at = applied_meta
+                state = (
+                    STATUS_APPLIED if local.md5 == applied_md5 else STATUS_MD5_MISMATCH
+                )
+                rows.append(StatusRow(version, state, applied_md5, applied_at))
+            elif local:
+                rows.append(StatusRow(version, STATUS_PENDING, local.md5, None))
+            else:
+                applied_md5, applied_at = applied_meta
+                rows.append(StatusRow(version, STATUS_UNKNOWN, applied_md5, applied_at))
+
+        return rows
 
     def format_migration_log(self, migration: Migration) -> str:
         if self._migration_log_format == MIGRATION_LOG_FORMAT_COMPACT:

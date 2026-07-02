@@ -87,6 +87,22 @@ CLI flag | Environment variable | Default
 `--log-level` | `LOG_LEVEL` | `WARNING`
 `--migration-log-format` | `MIGRATION_LOG_FORMAT` | `full`
 
+### Migration status
+
+Show which migrations are applied vs pending, without applying anything, using `--status`:
+
+```bash
+clickhouse-migrations --db-name test --migrations-dir ./migrations --status
+```
+
+```
+VERSION  STATUS   MD5                               APPLIED AT
+1        applied  6172991b15b0852bc895e09b3e91ade4  2024-01-01 12:00:00
+2        pending  1a79a4d60de6718e8e5b326e338ae533
+```
+
+States: `applied`, `pending`, `md5-mismatch` (a file changed after being applied), and `unknown` (applied but no longer present locally). It is read-only and never creates the database.
+
 ### In code
 ```python
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster

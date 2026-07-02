@@ -17,7 +17,7 @@ from clickhouse_migrations.defaults import (
 )
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
-from clickhouse_migrations.migrator import MIGRATION_LOG_FORMATS, Migrator
+from clickhouse_migrations.migrator import MIGRATION_LOG_FORMATS, Migrator, StatusRow
 
 
 def log_level(value: str) -> str:
@@ -148,6 +148,11 @@ def get_context(args):
         action=argparse.BooleanOptionalAction,
         help="Create database if it does not exist",
     )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Show applied vs pending migrations and exit without applying anything",
+    )
 
     return parser.parse_args(args)
 
@@ -183,6 +188,35 @@ def do_query_applied_migrations(cluster, ctx) -> List[Migration]:
         return migrator.query_applied_migrations()
 
 
+def do_status(cluster, ctx) -> List[StatusRow]:
+    return cluster.status(
+        db_name=ctx.db_name,
+        migration_path=ctx.migrations_dir,
+        explicit_migrations=ctx.migrations,
+    )
+
+
+def format_status(rows: List[StatusRow]) -> str:
+    if not rows:
+        return "No migrations found."
+
+    table = [("VERSION", "STATUS", "MD5", "APPLIED AT")]
+    for row in rows:
+        table.append(
+            (
+                str(row.version),
+                row.state,
+                row.md5 or "",
+                str(row.applied_at) if row.applied_at is not None else "",
+            )
+        )
+
+    widths = [max(len(row[i]) for row in table) for i in range(len(table[0]))]
+    return "\n".join(
+        "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)) for row in table
+    )
+
+
 def migrate(ctx) -> List[Migration]:
     logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
 
@@ -191,9 +225,22 @@ def migrate(ctx) -> List[Migration]:
     return migrations
 
 
+def show_status(ctx) -> List[StatusRow]:
+    logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
+
+    cluster = create_cluster(ctx)
+    rows = do_status(cluster, ctx)
+    print(format_status(rows))
+    return rows
+
+
 def main() -> int:
+    ctx = get_context(sys.argv[1:])
     try:
-        migrate(get_context(sys.argv[1:]))
+        if ctx.status:
+            show_status(ctx)
+        else:
+            migrate(ctx)
     except MigrationException as exc:
         logging.error("Migration failed: %s", exc)
         return 1
