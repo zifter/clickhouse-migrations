@@ -1,5 +1,18 @@
 # Changelog
 
+## [v0.12.0](https://github.com/zifter/clickhouse-migrations/tree/v0.12.0) (2026-07-02)
+
+[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.11.0...v0.12.0)
+
+**What's Changed:**
+- Support the official `clickhouse-connect` (HTTP) driver alongside the native `clickhouse-driver`, selectable with `--driver` / `DRIVER` (install via `pip install 'clickhouse-migrations[connect]'`). Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/59, https://github.com/zifter/clickhouse-migrations/pull/62
+- Add a `status` subcommand to show applied vs pending migrations without applying anything. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/58
+- Add a GitHub Action and a Docker image (GHCR) for running migrations; both bundle the native and `clickhouse-connect` drivers. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/54, https://github.com/zifter/clickhouse-migrations/pull/64
+- Derive the package version from the git tag via setuptools-scm. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/48
+- Fix boolean CLI argument parsing on Python 3.14. Done by @UnoYakshi in https://github.com/zifter/clickhouse-migrations/pull/47
+- Upload coverage to Codecov, add community health files, and improve the README (quick start, fixed badges, social preview). Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/52, https://github.com/zifter/clickhouse-migrations/pull/51, https://github.com/zifter/clickhouse-migrations/pull/63
+
+
 ## [v0.11.0](https://github.com/zifter/clickhouse-migrations/tree/v0.11.0) (2026-06-19)
 
 [Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.10.0...v0.11.0)
