@@ -34,6 +34,14 @@ Package | Differences
 
 You can install from pypi using `pip install clickhouse-migrations`.
 
+By default it uses the native [`clickhouse-driver`](https://github.com/mymarilyn/clickhouse-driver) (TCP, port 9000). To use the official HTTP [`clickhouse-connect`](https://github.com/ClickHouse/clickhouse-connect) driver instead, install the extra and pass `--driver clickhouse-connect`:
+
+```bash
+pip install 'clickhouse-migrations[connect]'
+```
+
+With `clickhouse-connect` the default port is `8123` (HTTP). Connecting via `--db-url` is only supported with the default `clickhouse-driver`; use `--db-host`/`--db-port` for `clickhouse-connect`.
+
 ## Migration files
 
 Migration files follow the naming convention `{VERSION}_{name}.sql`, e.g. `001_init.sql`, `002_add_users.sql`.
@@ -88,6 +96,7 @@ CLI flag | Environment variable | Default
 `--secure` | `SECURE` | `false`
 `--log-level` | `LOG_LEVEL` | `WARNING`
 `--migration-log-format` | `MIGRATION_LOG_FORMAT` | `full`
+`--driver` | `DRIVER` | `clickhouse-driver`
 
 ### Migration status
 

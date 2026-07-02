@@ -1,4 +1,7 @@
+import pytest
+
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
+from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.util import quote_identifier
 
 
@@ -61,6 +64,30 @@ def test_host_based_defaults_to_insecure():
     conn = _native(cluster, "mydb")
 
     assert conn.secure_socket is False
+
+
+def test_port_defaults_per_driver():
+    # pylint: disable=protected-access
+    driver_cluster = ClickhouseCluster(db_host="h")
+    assert driver_cluster._resolved_port() == 9000
+
+    connect_cluster = ClickhouseCluster(db_host="h", driver="clickhouse-connect")
+    assert connect_cluster._resolved_port() == 8123
+
+
+def test_explicit_port_overrides_default():
+    cluster = ClickhouseCluster(
+        db_host="h", db_port="9999", driver="clickhouse-connect"
+    )
+    assert cluster._resolved_port() == "9999"  # pylint: disable=protected-access
+
+
+def test_db_url_with_connect_driver_raises():
+    with pytest.raises(MigrationException, match="db_url is only supported"):
+        ClickhouseCluster(
+            db_url="clickhouse://default:@localhost:9000/db",
+            driver="clickhouse-connect",
+        )
 
 
 def test_quote_identifier_wraps_in_double_quotes():

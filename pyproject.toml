@@ -37,9 +37,13 @@ classifiers = [
 dependencies = [
     "clickhouse-driver>=0.2.2",
 ]
+optional-dependencies.connect = [
+    "clickhouse-connect>=0.7",
+]
 optional-dependencies.testing = [
     "pytest==8.4.1",
     "pytest-cov==6.2.1",
+    "clickhouse-connect>=0.7",
 ]
 dynamic =["version", "readme"]
 
