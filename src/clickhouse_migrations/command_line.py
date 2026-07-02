@@ -8,10 +8,10 @@ from typing import List
 
 from clickhouse_migrations import __version__
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
+from clickhouse_migrations.connection import CLICKHOUSE_DRIVER, DRIVERS
 from clickhouse_migrations.defaults import (
     DB_HOST,
     DB_PASSWORD,
-    DB_PORT,
     DB_USER,
     MIGRATIONS_DIR,
 )
@@ -62,8 +62,15 @@ def _add_common_arguments(parser):
     )
     parser.add_argument(
         "--db-port",
-        default=os.environ.get("DB_PORT", DB_PORT),
-        help="Clickhouse database port",
+        default=os.environ.get("DB_PORT", None),
+        help="Clickhouse database port "
+        "(default: 9000 for clickhouse-driver, 8123 for clickhouse-connect)",
+    )
+    parser.add_argument(
+        "--driver",
+        default=os.environ.get("DRIVER", CLICKHOUSE_DRIVER),
+        choices=DRIVERS,
+        help="ClickHouse driver to use",
     )
     parser.add_argument(
         "--db-user",
@@ -189,6 +196,7 @@ def create_cluster(ctx) -> ClickhouseCluster:
         db_password=ctx.db_password,
         db_url=ctx.db_url,
         secure=ctx.secure,
+        driver=ctx.driver,
     )
 
 
