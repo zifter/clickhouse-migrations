@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 
 from clickhouse_migrations import __version__, command_line
-from clickhouse_migrations.command_line import cast_to_bool, get_context, main
+from clickhouse_migrations.command_line import (
+    cast_to_bool,
+    format_status,
+    get_context,
+    main,
+)
+from clickhouse_migrations.migrator import StatusRow
 
 TESTS_DIR = Path(__file__).parent
 
@@ -135,6 +141,13 @@ def test_version_flag_prints_version_and_exits(capsys):
     assert __version__ in capsys.readouterr().out
 
 
+def test_version_subcommand(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["clickhouse-migrations", "version"])
+
+    assert main() == 0
+    assert __version__ in capsys.readouterr().out
+
+
 def test_main_returns_zero_on_success(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["clickhouse-migrations"])
     monkeypatch.setattr(command_line, "migrate", lambda ctx: [])
@@ -152,3 +165,32 @@ def test_main_returns_error_on_migration_exception(monkeypatch, tmp_path):
     )
 
     assert main() == 1
+
+
+def test_bare_invocation_defaults_to_migrate():
+    assert get_context([]).command == "migrate"
+    assert get_context(["--db-name", "x"]).command == "migrate"
+    assert get_context(["migrate", "--db-name", "x"]).command == "migrate"
+
+
+def test_status_subcommand():
+    context = get_context(["status", "--db-name", "x"])
+    assert context.command == "status"
+    assert context.db_name == "x"
+
+
+def test_format_status_empty():
+    assert format_status([]) == "No migrations found."
+
+
+def test_format_status_table():
+    rows = [
+        StatusRow(1, "applied", "abc", "2024-01-01 00:00:00"),
+        StatusRow(2, "pending", "def", None),
+    ]
+
+    out = format_status(rows)
+
+    assert "VERSION" in out and "STATUS" in out
+    assert "applied" in out and "pending" in out
+    assert "2024-01-01 00:00:00" in out

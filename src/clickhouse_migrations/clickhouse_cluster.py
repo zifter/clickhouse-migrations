@@ -6,7 +6,7 @@ from clickhouse_driver import Client
 
 from clickhouse_migrations.defaults import DB_HOST, DB_PASSWORD, DB_PORT, DB_USER
 from clickhouse_migrations.migration import Migration, MigrationStorage
-from clickhouse_migrations.migrator import Migrator
+from clickhouse_migrations.migrator import STATUS_PENDING, Migrator, StatusRow
 from clickhouse_migrations.util import quote_identifier
 
 
@@ -128,6 +128,32 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             fake=fake,
             migration_log_format=migration_log_format,
         )
+
+    def status(
+        self,
+        db_name: Optional[str],
+        migration_path: Union[Path, str],
+        explicit_migrations: Optional[List[str]] = None,
+    ) -> List[StatusRow]:
+        db_name = db_name if db_name is not None else self.default_db_name
+
+        storage = MigrationStorage(migration_path)
+        incoming = storage.migrations(explicit_migrations)
+
+        # Read-only: never create the database or the schema table. If the
+        # schema table is missing, nothing has been applied yet.
+        with self.connection("") as conn:
+            initialized = conn.execute(
+                "SELECT count() FROM system.tables "
+                "WHERE database = %(db)s AND name = 'schema_versions'",
+                {"db": db_name},
+            )[0][0]
+
+        if not initialized:
+            return [StatusRow(m.version, STATUS_PENDING, m.md5, None) for m in incoming]
+
+        with self.connection(db_name) as conn:
+            return Migrator(conn).migration_status(incoming)
 
     def apply_migrations(
         self,
