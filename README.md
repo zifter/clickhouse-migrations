@@ -89,10 +89,10 @@ CLI flag | Environment variable | Default
 
 ### Migration status
 
-Show which migrations are applied vs pending, without applying anything, using `--status`:
+Show which migrations are applied vs pending, without applying anything, using the `status` subcommand:
 
 ```bash
-clickhouse-migrations --db-name test --migrations-dir ./migrations --status
+clickhouse-migrations status --db-name test --migrations-dir ./migrations
 ```
 
 ```

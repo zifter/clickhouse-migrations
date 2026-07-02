@@ -46,20 +46,14 @@ def cast_to_bool(value: str):
     return value.lower() in ("1", "true", "yes", "y")
 
 
-def get_context(args):
-    parser = ArgumentParser()
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
-    )
+SUBCOMMANDS = ("migrate", "status")
 
-    default_migrations = os.environ.get("MIGRATIONS", "")
-    # detect configuration
+
+def _add_common_arguments(parser):
     parser.add_argument(
         "--db-url",
         default=os.environ.get("DB_URL", None),
-        help="Clickhouse database hostname",
+        help="Clickhouse connection URL (clickhouse://user:password@host:port/db)",
     )
     parser.add_argument(
         "--db-host",
@@ -90,13 +84,12 @@ def get_context(args):
         "--migrations-dir",
         default=os.environ.get("MIGRATIONS_DIR", MIGRATIONS_DIR),
         type=Path,
-        help="Path to list of migration files",
+        help="Path to the directory with migration files",
     )
     parser.add_argument(
-        "--multi-statement",
-        default=cast_to_bool(os.environ.get("MULTI_STATEMENT", "1")),
-        action=argparse.BooleanOptionalAction,
-        help="Treat each migration file as multiple ';'-separated statements",
+        "--cluster-name",
+        default=os.environ.get("CLUSTER_NAME", None),
+        help="Clickhouse topology cluster",
     )
     parser.add_argument(
         "--log-level",
@@ -105,15 +98,34 @@ def get_context(args):
         help="Log level",
     )
     parser.add_argument(
+        "--secure",
+        default=cast_to_bool(os.environ.get("SECURE", "0")),
+        action=argparse.BooleanOptionalAction,
+        help="Use secure connection",
+    )
+    default_migrations = os.environ.get("MIGRATIONS", "")
+    parser.add_argument(
+        "--migrations",
+        default=default_migrations.split(",") if default_migrations else [],
+        type=str,
+        nargs="+",
+        help="Explicit list of migrations to apply. "
+        "Specify file name, file stem or migration version like 001_init.sql, 002_test2, 003, 4",
+    )
+
+
+def _add_migrate_arguments(parser):
+    parser.add_argument(
+        "--multi-statement",
+        default=cast_to_bool(os.environ.get("MULTI_STATEMENT", "1")),
+        action=argparse.BooleanOptionalAction,
+        help="Treat each migration file as multiple ';'-separated statements",
+    )
+    parser.add_argument(
         "--migration-log-format",
         default=os.environ.get("MIGRATION_LOG_FORMAT", "full"),
         type=migration_log_format,
         help="Migration log format: full or compact",
-    )
-    parser.add_argument(
-        "--cluster-name",
-        default=os.environ.get("CLUSTER_NAME", None),
-        help="Clickhouse topology cluster",
     )
     parser.add_argument(
         "--dry-run",
@@ -129,30 +141,40 @@ def get_context(args):
         "but without actually running the SQL to change your database schema.",
     )
     parser.add_argument(
-        "--migrations",
-        default=default_migrations.split(",") if default_migrations else [],
-        type=str,
-        nargs="+",
-        help="Explicit list of migrations to apply. "
-        "Specify file name, file stem or migration version like 001_init.sql, 002_test2, 003, 4",
-    )
-    parser.add_argument(
-        "--secure",
-        default=cast_to_bool(os.environ.get("SECURE", "0")),
-        action=argparse.BooleanOptionalAction,
-        help="Use secure connection",
-    )
-    parser.add_argument(
         "--create-db-if-not-exists",
         default=cast_to_bool(os.environ.get("CREATE_DB_IF_NOT_EXISTS", "1")),
         action=argparse.BooleanOptionalAction,
         help="Create database if it does not exist",
     )
+
+
+def get_context(args):
+    parser = ArgumentParser(prog="clickhouse-migrations")
     parser.add_argument(
-        "--status",
-        action="store_true",
-        help="Show applied vs pending migrations and exit without applying anything",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
+
+    subparsers = parser.add_subparsers(dest="command")
+    migrate_parser = subparsers.add_parser(
+        "migrate", help="Apply pending migrations (default)"
+    )
+    _add_common_arguments(migrate_parser)
+    _add_migrate_arguments(migrate_parser)
+
+    status_parser = subparsers.add_parser(
+        "status", help="Show applied vs pending migrations without applying anything"
+    )
+    _add_common_arguments(status_parser)
+
+    # Default to the "migrate" subcommand so existing invocations
+    # (clickhouse-migrations <flags>) keep working unchanged.
+    args = list(args)
+    if not args or (
+        args[0] not in SUBCOMMANDS and args[0] not in ("-h", "--help", "--version")
+    ):
+        args = ["migrate", *args]
 
     return parser.parse_args(args)
 
@@ -237,7 +259,7 @@ def show_status(ctx) -> List[StatusRow]:
 def main() -> int:
     ctx = get_context(sys.argv[1:])
     try:
-        if ctx.status:
+        if ctx.command == "status":
             show_status(ctx)
         else:
             migrate(ctx)

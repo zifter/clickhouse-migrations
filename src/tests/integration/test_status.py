@@ -34,11 +34,11 @@ def test_main_status_flag_prints_table(cluster: ClickhouseCluster, monkeypatch, 
         "argv",
         [
             "clickhouse-migrations",
+            "status",
             "--db-name",
             "pytest",
             "--migrations-dir",
             str(MIGRATIONS),
-            "--status",
         ],
     )
 

@@ -160,9 +160,16 @@ def test_main_returns_error_on_migration_exception(monkeypatch, tmp_path):
     assert main() == 1
 
 
-def test_check_status_flag():
-    assert get_context([]).status is False
-    assert get_context(["--status"]).status is True
+def test_bare_invocation_defaults_to_migrate():
+    assert get_context([]).command == "migrate"
+    assert get_context(["--db-name", "x"]).command == "migrate"
+    assert get_context(["migrate", "--db-name", "x"]).command == "migrate"
+
+
+def test_status_subcommand():
+    context = get_context(["status", "--db-name", "x"])
+    assert context.command == "status"
+    assert context.db_name == "x"
 
 
 def test_format_status_empty():
