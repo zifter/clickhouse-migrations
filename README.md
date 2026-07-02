@@ -178,17 +178,18 @@ Apply migrations from a GitHub workflow with the composite action:
   with:
     migrations-dir: ./migrations
     db-host: localhost
-    db-port: "9000"
     db-user: default
     db-password: ${{ secrets.CLICKHOUSE_PASSWORD }}
     db-name: mydb
-    # or connect via a single URL instead of the db-* inputs:
+    # driver: clickhouse-connect   # optional; official HTTP driver (both are bundled). Defaults to native clickhouse-driver.
+    # db-port: "9000"              # optional; defaults to 9000 (clickhouse-driver) / 8123 (clickhouse-connect)
+    # or connect via a single URL instead of the db-* inputs (clickhouse-driver only):
     # db-url: ${{ secrets.CLICKHOUSE_URL }}
     # any extra raw CLI flags:
     # extra-args: --secure --create-db-if-not-exists
 ```
 
-Inputs: `migrations-dir`, `db-url`, `db-host`, `db-port`, `db-user`, `db-password`, `db-name`, `cluster-name`, `extra-args`, `version` (pin the package version), `python-version`. You can also pin an exact release, e.g. `zifter/clickhouse-migrations@v0.12.0`.
+Both drivers are bundled, so `driver: clickhouse-connect` works without extra setup. Inputs: `migrations-dir`, `db-url`, `db-host`, `db-port`, `db-user`, `db-password`, `db-name`, `cluster-name`, `driver`, `extra-args`, `version` (pin the package version), `python-version`. You can also pin an exact release, e.g. `zifter/clickhouse-migrations@v0.12.0`.
 
 ### With Docker
 
@@ -199,6 +200,15 @@ docker run --rm \
     -v "$PWD/migrations:/migrations" \
     ghcr.io/zifter/clickhouse-migrations:latest \
     --db-url clickhouse://default:secret@clickhouse:9000/mydb
+```
+
+The image bundles **both drivers**. It uses the native `clickhouse-driver` by default; to use the official HTTP `clickhouse-connect` driver, pass `--driver clickhouse-connect` (default port `8123`, and note `--db-url` is `clickhouse-driver` only):
+
+```bash
+docker run --rm \
+    -v "$PWD/migrations:/migrations" \
+    ghcr.io/zifter/clickhouse-migrations:latest \
+    --driver clickhouse-connect --db-host clickhouse --db-name mydb
 ```
 
 Run migrations as a Kubernetes `Job`, e.g. before rolling out a deployment:

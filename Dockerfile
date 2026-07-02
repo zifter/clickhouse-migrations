@@ -20,7 +20,10 @@ LABEL org.opencontainers.image.description="Simple file-based schema migrations 
 LABEL org.opencontainers.image.licenses="MIT"
 
 COPY --from=build /dist/*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/*.whl && rm -rf /tmp/*.whl
+# Install with the [connect] extra so BOTH drivers ship in the image: the native
+# clickhouse-driver (default) and the official HTTP clickhouse-connect driver
+# (selected at runtime with --driver clickhouse-connect).
+RUN pip install --no-cache-dir "$(echo /tmp/*.whl)[connect]" && rm -rf /tmp/*.whl
 
 # Mount your migrations here (e.g. `-v $PWD/migrations:/migrations`); the CLI
 # reads this path by default, override with `--migrations-dir` if needed.
