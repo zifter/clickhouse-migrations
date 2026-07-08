@@ -1,0 +1,42 @@
+name: star-history
+
+# Regenerate the committed star-history chart (assets/star-history.svg) from the
+# GitHub stargazers API. main requires PR review, so instead of pushing directly
+# the job opens a PR whenever the chart changes.
+on:
+  schedule:
+    - cron: "17 3 1 * *" # monthly, 1st at 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Regenerate star-history chart
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/gen_star_history.py --repo "${{ github.repository }}" --out assets/star-history.svg
+
+      - name: Open a PR if the chart changed
+        uses: peter-evans/create-pull-request@v7
+        with:
+          add-paths: assets/star-history.svg
+          branch: chore/star-history-refresh
+          delete-branch: true
+          commit-message: "chore: refresh star-history chart"
+          title: "chore: refresh star-history chart"
+          body: |
+            Automated monthly refresh of `assets/star-history.svg` from the GitHub stargazers API.

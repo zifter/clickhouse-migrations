@@ -285,4 +285,6 @@ One important caveat:
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=zifter/clickhouse-migrations&type=Date)](https://star-history.com/#zifter/clickhouse-migrations&Date)
+[![Star History Chart](assets/star-history.svg)](https://star-history.com/#zifter/clickhouse-migrations&Date)
+
+<sub>Chart is a self-contained SVG (`assets/star-history.svg`) generated from the GitHub API and refreshed by the [`star-history`](.github/workflows/star-history.yml) workflow, so it never breaks when a third-party embed service is rate-limited.</sub>
