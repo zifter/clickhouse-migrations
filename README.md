@@ -285,4 +285,10 @@ One important caveat:
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=zifter/clickhouse-migrations&type=Date)](https://star-history.com/#zifter/clickhouse-migrations&Date)
+<a href="https://www.star-history.com/?type=date&repos=zifter%2Fclickhouse-migrations">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=zifter/clickhouse-migrations&type=date&theme=dark&legend=top-left&sealed_token=Lg0-ckR6MostLY6zlv6N28heM0N_Ydc4NL-tKY3aExJD1B-Old0XKK2DhXNUgDM05YqAsK6FflkMH2hf4_AFsLMbFkXxxe4bU6P5yG1gmWVRVNI2jCchOnC4ftJLi2Zd9XVoBtYY3n0rpkCsfB-WoKVZaJW2GKgt-jygoj5XjoTHMxZWpXdNJ1QPaZu4" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=zifter/clickhouse-migrations&type=date&legend=top-left&sealed_token=Lg0-ckR6MostLY6zlv6N28heM0N_Ydc4NL-tKY3aExJD1B-Old0XKK2DhXNUgDM05YqAsK6FflkMH2hf4_AFsLMbFkXxxe4bU6P5yG1gmWVRVNI2jCchOnC4ftJLi2Zd9XVoBtYY3n0rpkCsfB-WoKVZaJW2GKgt-jygoj5XjoTHMxZWpXdNJ1QPaZu4" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=zifter/clickhouse-migrations&type=date&legend=top-left&sealed_token=Lg0-ckR6MostLY6zlv6N28heM0N_Ydc4NL-tKY3aExJD1B-Old0XKK2DhXNUgDM05YqAsK6FflkMH2hf4_AFsLMbFkXxxe4bU6P5yG1gmWVRVNI2jCchOnC4ftJLi2Zd9XVoBtYY3n0rpkCsfB-WoKVZaJW2GKgt-jygoj5XjoTHMxZWpXdNJ1QPaZu4" />
+ </picture>
+</a>
