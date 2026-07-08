@@ -223,6 +223,72 @@ ORDER BY tuple(created_at)"""
 
         return migrations_to_process
 
+    def _rollback_targets(self, steps: int, to_version: Optional[int]) -> List[int]:
+        applied_versions = [m.version for m in self.query_applied_migrations()]
+
+        if to_version is not None:
+            targets = [v for v in applied_versions if v > to_version]
+        elif steps < 1:
+            raise MigrationException("steps must be >= 1")
+        else:
+            targets = applied_versions[-steps:]
+
+        # Roll back newest first.
+        return sorted(targets, reverse=True)
+
+    def rollback_migration(
+        self,
+        down_scripts: Dict[int, str],
+        steps: int = 1,
+        to_version: Optional[int] = None,
+        multi_statement: bool = True,
+    ) -> List[int]:
+        targets = self._rollback_targets(steps, to_version)
+        if not targets:
+            logging.info("Nothing to roll back.")
+            return []
+
+        # Fail-fast: refuse to start unless every target has a down script, so we
+        # never leave the database half rolled back on a missing file.
+        missing = sorted(v for v in targets if v not in down_scripts)
+        if missing:
+            raise MigrationException(
+                "No down migration for version(s): "
+                + ", ".join(str(v) for v in missing)
+            )
+
+        for version in targets:
+            logging.info("Rolling back migration version %s", version)
+            statements = self.script_to_statements(
+                down_scripts[version], multi_statement
+            )
+            for statement in statements:
+                if self._dryrun:
+                    logging.info("Dry run mode, would have executed: %s", statement)
+                else:
+                    self._conn.command(statement)
+
+            # Delete the row only after the down script ran, so a failed down
+            # keeps the migration marked as applied. mutations_sync = 2 makes the
+            # delete synchronous (waiting on all replicas), so a subsequent
+            # status/rollback immediately sees the migration as pending — an
+            # async mutation would otherwise still report it as applied.
+            if self._dryrun:
+                logging.info(
+                    "Dry run mode, would have removed schema version %s", version
+                )
+            else:
+                self._conn.command(
+                    "ALTER TABLE schema_versions "
+                    f"DELETE WHERE version = {int(version)} "
+                    "SETTINGS mutations_sync = 2"
+                )
+
+        if not self._dryrun:
+            self.optimize_schema_table()
+
+        return targets
+
     def _insert_schema_version(self, migration: Migration) -> None:
         self._conn.insert(
             "schema_versions",

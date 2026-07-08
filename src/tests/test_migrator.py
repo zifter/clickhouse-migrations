@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
 from clickhouse_migrations.migrator import (
     STATUS_APPLIED,
@@ -12,6 +13,28 @@ from clickhouse_migrations.migrator import (
 )
 
 FIXTURES_DIR = Path(__file__).parent
+
+
+class _FakeConn:
+    """Minimal Connection stub that records commands and returns a fixed set of
+    applied migrations, so rollback branching can be tested without ClickHouse."""
+
+    def __init__(self, applied_versions):
+        self._applied_versions = applied_versions
+        self.commands = []
+
+    def command(self, statement):
+        self.commands.append(statement)
+
+    def query(self, _query):
+        return [
+            {"version": v, "script": f"script{v}", "md5": f"md5{v}"}
+            for v in self._applied_versions
+        ]
+
+
+def _down_scripts(*versions):
+    return {v: f"DROP TABLE t{v};" for v in versions}
 
 
 def test_split_statements_with_multi_line_ok():
@@ -186,3 +209,88 @@ def test_build_status_classifies_every_state():
 def test_build_status_empty():
     # pylint: disable=protected-access
     assert not Migrator._build_status([], {})
+
+
+def test_rollback_default_step_removes_newest():
+    conn = _FakeConn([1, 2, 3])
+    migrator = Migrator(conn)
+
+    rolled = migrator.rollback_migration(_down_scripts(1, 2, 3))
+
+    assert rolled == [3]
+    assert "DROP TABLE t3;" in conn.commands
+    assert any("DELETE WHERE version = 3" in c for c in conn.commands)
+    assert not any("DELETE WHERE version = 2" in c for c in conn.commands)
+
+
+def test_rollback_multiple_steps_are_newest_first():
+    conn = _FakeConn([1, 2, 3])
+    migrator = Migrator(conn)
+
+    rolled = migrator.rollback_migration(_down_scripts(1, 2, 3), steps=2)
+
+    assert rolled == [3, 2]
+    deletes = [c for c in conn.commands if "DELETE WHERE version" in c]
+    # Newest version is deleted first.
+    assert "version = 3" in deletes[0]
+    assert "version = 2" in deletes[1]
+
+
+def test_rollback_to_version_rolls_back_everything_above():
+    conn = _FakeConn([1, 2, 3])
+    migrator = Migrator(conn)
+
+    rolled = migrator.rollback_migration(_down_scripts(1, 2, 3), to_version=1)
+
+    assert rolled == [3, 2]
+
+
+def test_rollback_to_version_zero_rolls_back_all():
+    conn = _FakeConn([1, 2])
+    migrator = Migrator(conn)
+
+    assert migrator.rollback_migration(_down_scripts(1, 2), to_version=0) == [2, 1]
+
+
+def test_rollback_no_applied_returns_empty():
+    conn = _FakeConn([])
+    migrator = Migrator(conn)
+
+    assert migrator.rollback_migration(_down_scripts(1)) == []
+
+
+def test_rollback_to_version_above_head_is_noop():
+    conn = _FakeConn([1, 2])
+    migrator = Migrator(conn)
+
+    assert migrator.rollback_migration(_down_scripts(1, 2), to_version=5) == []
+
+
+def test_rollback_missing_down_script_fails_fast():
+    conn = _FakeConn([1, 2])
+    migrator = Migrator(conn)
+
+    with pytest.raises(MigrationException, match="No down migration for version"):
+        migrator.rollback_migration(_down_scripts(1), steps=2)
+
+    # Nothing should have been rolled back.
+    assert not any("DELETE WHERE version" in c for c in conn.commands)
+
+
+def test_rollback_invalid_steps_raises():
+    conn = _FakeConn([1, 2])
+    migrator = Migrator(conn)
+
+    with pytest.raises(MigrationException, match="steps must be >= 1"):
+        migrator.rollback_migration(_down_scripts(1, 2), steps=0)
+
+
+def test_rollback_dry_run_executes_nothing():
+    conn = _FakeConn([1, 2])
+    migrator = Migrator(conn, dryrun=True)
+
+    rolled = migrator.rollback_migration(_down_scripts(1, 2), steps=1)
+
+    assert rolled == [2]
+    assert not any("DROP TABLE" in c for c in conn.commands)
+    assert not any("DELETE WHERE version" in c for c in conn.commands)
