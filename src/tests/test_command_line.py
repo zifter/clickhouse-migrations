@@ -179,6 +179,38 @@ def test_status_subcommand():
     assert context.db_name == "x"
 
 
+def test_down_subcommand_defaults():
+    context = get_context(["down", "--db-name", "x"])
+    assert context.command == "down"
+    assert context.db_name == "x"
+    assert context.steps == 1
+    assert context.to_version is None
+    assert context.dry_run is False
+    assert context.multi_statement is True
+
+
+def test_down_subcommand_steps_and_to():
+    context = get_context(["down", "--steps", "3", "--to", "5"])
+    assert context.steps == 3
+    assert context.to_version == 5
+
+
+def test_down_subcommand_dry_run_and_no_multi_statement():
+    context = get_context(["down", "--dry-run", "--no-multi-statement"])
+    assert context.dry_run is True
+    assert context.multi_statement is False
+
+
+def test_main_down_dispatches_to_rollback(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sys, "argv", ["clickhouse-migrations", "down"])
+    monkeypatch.setattr(command_line, "rollback", calls.append)
+
+    assert main() == 0
+    assert len(calls) == 1
+    assert calls[0].command == "down"
+
+
 def test_driver_default_and_override():
     assert get_context([]).driver == "clickhouse-driver"
     assert (

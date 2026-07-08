@@ -29,6 +29,7 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 * **Run anywhere** — CLI, Python API, [GitHub Action](#in-ci-github-action), or [Docker image](#with-docker)
 * **Two drivers** — native `clickhouse-driver` (TCP) or official `clickhouse-connect` (HTTP)
 * **Inspect before you apply** — [`status`](#migration-status) and `--dry-run` show applied vs pending migrations without touching data
+* **Naive rollbacks** — optional paired [`{VERSION}_{name}.down.sql`](#rollbacks-down-migrations) files and a `down` subcommand to reverse applied migrations
 
 ## Known alternatives
 This package originally forked from [clickhouse-migrator](https://github.com/delium/clickhouse-migrator).
@@ -67,6 +68,9 @@ ORDER BY id;
 
 ALTER TABLE mydb.events ADD COLUMN created_at DateTime DEFAULT now();
 ```
+
+Optionally, add a paired rollback file `{VERSION}_{name}.down.sql` next to a migration
+(e.g. `001_init.down.sql`) to make it reversible — see [Rollbacks](#rollbacks-down-migrations).
 
 ## Usage
 
@@ -122,6 +126,33 @@ VERSION  STATUS   MD5                               APPLIED AT
 ```
 
 States: `applied`, `pending`, `md5-mismatch` (a file changed after being applied), and `unknown` (applied but no longer present locally). It is read-only and never creates the database.
+
+### Rollbacks (down migrations)
+
+Rollbacks are **explicit and hand-written**. For any migration you want to be reversible, add a paired file `{VERSION}_{name}.down.sql` next to it:
+
+```sql
+-- migrations/001_init.sql
+CREATE TABLE mydb.events (id UInt32, name String) ENGINE = MergeTree() ORDER BY id;
+
+-- migrations/001_init.down.sql
+DROP TABLE mydb.events;
+```
+
+Roll back with the `down` subcommand. By default it reverses the single most recent applied migration:
+
+```bash
+clickhouse-migrations down --db-name test --migrations-dir ./migrations
+clickhouse-migrations down --steps 3 ...        # the 3 most recent, newest first
+clickhouse-migrations down --to 5 ...           # everything with a version > 5
+clickhouse-migrations down --dry-run ...        # print what would run, change nothing
+```
+
+For each migration in range (newest first) it runs the statements from the `.down.sql` file and then removes the row from `schema_versions`, so `status` reports the migration as `pending` again. If a `.down.sql` file is missing for any migration in the range, `down` fails without changing anything.
+
+> **This is deliberately naive.** ClickHouse has no transactional DDL, so there is no *automatic* rollback and no all-or-nothing guarantee across statements. Reversible changes (`CREATE TABLE` ↔ `DROP TABLE`, `ADD COLUMN` ↔ `DROP COLUMN`) roll back cleanly; **destructive** operations (data-losing drops, `ALTER … DELETE/UPDATE` mutations) are your responsibility — nothing can bring dropped data back. For a *failed* migration you usually don't need `down` at all: a migration is recorded only after its statements succeed, so a failed one stays `pending` — just fix the SQL and re-run.
+
+`--steps` (default `1`), `--to`, `--dry-run` and `--multi-statement` apply to the `down` subcommand.
 
 ### In code
 ```python

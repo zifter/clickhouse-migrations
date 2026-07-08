@@ -46,7 +46,7 @@ def cast_to_bool(value: str):
     return value.lower() in ("1", "true", "yes", "y")
 
 
-SUBCOMMANDS = ("migrate", "status", "version")
+SUBCOMMANDS = ("migrate", "status", "down", "version")
 
 
 def _add_common_arguments(parser):
@@ -155,6 +155,35 @@ def _add_migrate_arguments(parser):
     )
 
 
+def _add_down_arguments(parser):
+    parser.add_argument(
+        "--steps",
+        default=1,
+        type=int,
+        help="Number of most recent applied migrations to roll back (default: 1)",
+    )
+    parser.add_argument(
+        "--to",
+        dest="to_version",
+        default=None,
+        type=int,
+        help="Roll back every applied migration with a version greater than this. "
+        "Takes precedence over --steps.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        default=cast_to_bool(os.environ.get("DRY_RUN", "0")),
+        action=argparse.BooleanOptionalAction,
+        help="Dry run mode",
+    )
+    parser.add_argument(
+        "--multi-statement",
+        default=cast_to_bool(os.environ.get("MULTI_STATEMENT", "1")),
+        action=argparse.BooleanOptionalAction,
+        help="Treat each down migration file as multiple ';'-separated statements",
+    )
+
+
 def get_context(args):
     parser = ArgumentParser(prog="clickhouse-migrations")
     parser.add_argument(
@@ -174,6 +203,13 @@ def get_context(args):
         "status", help="Show applied vs pending migrations without applying anything"
     )
     _add_common_arguments(status_parser)
+
+    down_parser = subparsers.add_parser(
+        "down",
+        help="Roll back applied migrations using their .down.sql files",
+    )
+    _add_common_arguments(down_parser)
+    _add_down_arguments(down_parser)
 
     subparsers.add_parser("version", help="Show the version and exit")
 
@@ -228,6 +264,17 @@ def do_status(cluster, ctx) -> List[StatusRow]:
     )
 
 
+def do_rollback(cluster, ctx) -> List[int]:
+    return cluster.rollback(
+        db_name=ctx.db_name,
+        migration_path=ctx.migrations_dir,
+        steps=ctx.steps,
+        to_version=ctx.to_version,
+        dryrun=ctx.dry_run,
+        multi_statement=ctx.multi_statement,
+    )
+
+
 def format_status(rows: List[StatusRow]) -> str:
     if not rows:
         return "No migrations found."
@@ -266,6 +313,13 @@ def show_status(ctx) -> List[StatusRow]:
     return rows
 
 
+def rollback(ctx) -> List[int]:
+    logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
+
+    cluster = create_cluster(ctx)
+    return do_rollback(cluster, ctx)
+
+
 def main() -> int:
     ctx = get_context(sys.argv[1:])
     if ctx.command == "version":
@@ -274,6 +328,8 @@ def main() -> int:
     try:
         if ctx.command == "status":
             show_status(ctx)
+        elif ctx.command == "down":
+            rollback(ctx)
         else:
             migrate(ctx)
     except MigrationException as exc:

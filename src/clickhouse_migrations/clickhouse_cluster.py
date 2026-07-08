@@ -187,6 +187,39 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         with self.connection(db_name) as conn:
             return Migrator(conn).migration_status(incoming)
 
+    def rollback(
+        self,
+        db_name: Optional[str],
+        migration_path: Union[Path, str],
+        steps: int = 1,
+        to_version: Optional[int] = None,
+        dryrun: bool = False,
+        multi_statement: bool = True,
+    ) -> List[int]:
+        db_name = db_name if db_name is not None else self.default_db_name
+
+        down_scripts = MigrationStorage(migration_path).down_scripts()
+
+        # Read-only pre-check: if the schema table is missing, nothing has been
+        # applied yet, so there is nothing to roll back.
+        with self.connection("") as conn:
+            initialized = conn.query(
+                "SELECT count() AS n FROM system.tables "
+                f"WHERE database = {quote_string(db_name)} AND name = 'schema_versions'"
+            )[0]["n"]
+
+        if not initialized:
+            return []
+
+        with self.connection(db_name) as conn:
+            migrator = Migrator(conn, dryrun)
+            return migrator.rollback_migration(
+                down_scripts,
+                steps=steps,
+                to_version=to_version,
+                multi_statement=multi_statement,
+            )
+
     def apply_migrations(
         self,
         db_name: str,
