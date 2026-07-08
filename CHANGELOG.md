@@ -1,9 +1,11 @@
 # Changelog
 
-## [Unreleased](https://github.com/zifter/clickhouse-migrations/tree/HEAD)
+## [v0.13.0](https://github.com/zifter/clickhouse-migrations/tree/v0.13.0) (2026-07-08)
+
+[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.12.0...v0.13.0)
 
 **What's Changed:**
-- Add naive rollback support: optional paired `{VERSION}_{name}.down.sql` files and a `down` subcommand (`--steps` / `--to` / `--dry-run`) to reverse applied migrations. There is no automatic rollback (ClickHouse has no transactional DDL) — down scripts are explicit and hand-written. Closes #36, #67.
+- Add naive rollback support: optional paired `{VERSION}_{name}.down.sql` files and a `down` subcommand (`--steps` / `--to` / `--dry-run`) to reverse applied migrations. There is no automatic rollback (ClickHouse has no transactional DDL) — down scripts are explicit and hand-written. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/69. Closes #36, #67.
 
 
 ## [v0.12.0](https://github.com/zifter/clickhouse-migrations/tree/v0.12.0) (2026-07-02)
