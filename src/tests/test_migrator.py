@@ -219,8 +219,8 @@ def test_rollback_default_step_removes_newest():
 
     assert rolled == [3]
     assert "DROP TABLE t3;" in conn.commands
-    assert "ALTER TABLE schema_versions DELETE WHERE version = 3" in conn.commands
-    assert "ALTER TABLE schema_versions DELETE WHERE version = 2" not in conn.commands
+    assert any("DELETE WHERE version = 3" in c for c in conn.commands)
+    assert not any("DELETE WHERE version = 2" in c for c in conn.commands)
 
 
 def test_rollback_multiple_steps_are_newest_first():
@@ -230,13 +230,10 @@ def test_rollback_multiple_steps_are_newest_first():
     rolled = migrator.rollback_migration(_down_scripts(1, 2, 3), steps=2)
 
     assert rolled == [3, 2]
-    delete_3 = conn.commands.index(
-        "ALTER TABLE schema_versions DELETE WHERE version = 3"
-    )
-    delete_2 = conn.commands.index(
-        "ALTER TABLE schema_versions DELETE WHERE version = 2"
-    )
-    assert delete_3 < delete_2
+    deletes = [c for c in conn.commands if "DELETE WHERE version" in c]
+    # Newest version is deleted first.
+    assert "version = 3" in deletes[0]
+    assert "version = 2" in deletes[1]
 
 
 def test_rollback_to_version_rolls_back_everything_above():

@@ -269,7 +269,10 @@ ORDER BY tuple(created_at)"""
                     self._conn.command(statement)
 
             # Delete the row only after the down script ran, so a failed down
-            # keeps the migration marked as applied.
+            # keeps the migration marked as applied. mutations_sync = 2 makes the
+            # delete synchronous (waiting on all replicas), so a subsequent
+            # status/rollback immediately sees the migration as pending — an
+            # async mutation would otherwise still report it as applied.
             if self._dryrun:
                 logging.info(
                     "Dry run mode, would have removed schema version %s", version
@@ -277,7 +280,8 @@ ORDER BY tuple(created_at)"""
             else:
                 self._conn.command(
                     "ALTER TABLE schema_versions "
-                    f"DELETE WHERE version = {int(version)}"
+                    f"DELETE WHERE version = {int(version)} "
+                    "SETTINGS mutations_sync = 2"
                 )
 
         if not self._dryrun:
