@@ -87,7 +87,9 @@ class MigrationStorage:
             migration = Migration(
                 version=version_number,
                 script=str(full_path.read_text(encoding="utf8")),
-                md5=hashlib.md5(full_path.read_bytes()).hexdigest(),
+                md5=hashlib.md5(
+                    full_path.read_bytes(), usedforsecurity=False
+                ).hexdigest(),
             )
 
             if (
