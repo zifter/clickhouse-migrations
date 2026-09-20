@@ -1,8 +1,11 @@
 import hashlib
 import os
+import re
+import unicodedata
 from collections import namedtuple
+from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from clickhouse_migrations.exceptions import MigrationException
 
@@ -11,6 +14,24 @@ Migration = namedtuple("Migration", ["version", "md5", "script"])
 # Suffix that marks an optional, hand-written rollback ("down") script paired
 # with a migration by version, e.g. 001_init.sql <-> 001_init.down.sql.
 DOWN_SUFFIX = ".down.sql"
+
+# Width used for the version prefix of a brand new migration when there is
+# nothing on disk yet to copy the padding from.
+DEFAULT_VERSION_WIDTH = 3
+
+
+def slugify(name: str) -> str:
+    # The name ends up in a file name, so keep it portable: fold accents instead
+    # of dropping the letter ("café" -> "cafe") and squash everything else into
+    # single underscores.
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "_", folded.lower()).strip("_")
+    if not slug:
+        raise MigrationException(
+            f"Migration name must contain letters or digits, got: {name!r}"
+        )
+
+    return slug
 
 
 def _parse_version(filename: str) -> int:
@@ -66,6 +87,62 @@ class MigrationStorage:
             )
 
         return scripts
+
+    def _existing_files(self) -> List[Tuple[int, str]]:
+        # Both up and down files take part: the version of a migration is owned
+        # by the pair, so a stray 004_x.down.sql still reserves version 4.
+        return [
+            (_parse_version(entry.name), entry.name)
+            for entry in os.scandir(self.storage_dir)
+            if entry.name.endswith(".sql")
+        ]
+
+    def next_version(self) -> int:
+        self._require_dir()
+
+        return max((version for version, _ in self._existing_files()), default=0) + 1
+
+    def version_width(self) -> int:
+        """Zero-padding width for a new version, copied from the widest file on disk."""
+        self._require_dir()
+
+        return max(
+            (len(name.split("_")[0]) for _, name in self._existing_files()),
+            default=DEFAULT_VERSION_WIDTH,
+        )
+
+    def create(
+        self,
+        name: str,
+        version: Optional[int] = None,
+        with_down: bool = False,
+    ) -> List[Path]:
+        """Scaffold the next migration file (and its down pair) locally."""
+        # Scaffolding never touches ClickHouse, so a fresh checkout should not
+        # need a manual mkdir before its very first migration.
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+
+        slug = slugify(name)
+        if version is None:
+            version = self.next_version()
+
+        taken = dict(self._existing_files())
+        if version in taken:
+            raise MigrationException(
+                f"Duplicate migration version {version}: {taken[version]} already exists"
+            )
+
+        prefix = f"{version:0{self.version_width()}d}"
+        created = [self.storage_dir / f"{prefix}_{slug}.sql"]
+        if with_down:
+            created.append(self.storage_dir / f"{prefix}_{slug}{DOWN_SUFFIX}")
+
+        today = date.today().isoformat()
+        for path in created:
+            title = f"{name} (rollback)" if path.name.endswith(DOWN_SUFFIX) else name
+            path.write_text(f"-- {title}\n-- created: {today}\n", encoding="utf8")
+
+        return created
 
     def migrations(
         self, explicit_migrations: Optional[List[str]] = None

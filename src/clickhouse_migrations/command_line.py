@@ -16,7 +16,7 @@ from clickhouse_migrations.defaults import (
     MIGRATIONS_DIR,
 )
 from clickhouse_migrations.exceptions import MigrationException
-from clickhouse_migrations.migration import Migration
+from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import MIGRATION_LOG_FORMATS, Migrator, StatusRow
 
 
@@ -46,7 +46,7 @@ def cast_to_bool(value: str):
     return value.lower() in ("1", "true", "yes", "y")
 
 
-SUBCOMMANDS = ("migrate", "status", "down", "version")
+SUBCOMMANDS = ("migrate", "status", "down", "new", "version")
 
 
 def _add_common_arguments(parser):
@@ -184,6 +184,35 @@ def _add_down_arguments(parser):
     )
 
 
+def _add_new_arguments(parser):
+    parser.add_argument(
+        "name",
+        help='Human readable migration name, e.g. "add events"',
+    )
+    # "new" never connects to ClickHouse, so it takes none of the common
+    # database arguments - only the directory to scaffold into.
+    parser.add_argument(
+        "--dir",
+        "--migrations-dir",
+        dest="migrations_dir",
+        default=os.environ.get("MIGRATIONS_DIR", MIGRATIONS_DIR),
+        type=Path,
+        help="Path to the directory with migration files",
+    )
+    parser.add_argument(
+        "--down",
+        default=False,
+        action="store_true",
+        help="Also create the paired {VERSION}_{name}.down.sql rollback file",
+    )
+    parser.add_argument(
+        "--version",
+        default=None,
+        type=int,
+        help="Use this version instead of the next one; fails if it is taken",
+    )
+
+
 def get_context(args):
     parser = ArgumentParser(prog="clickhouse-migrations")
     parser.add_argument(
@@ -210,6 +239,11 @@ def get_context(args):
     )
     _add_common_arguments(down_parser)
     _add_down_arguments(down_parser)
+
+    new_parser = subparsers.add_parser(
+        "new", help="Create the next migration file locally, without any database"
+    )
+    _add_new_arguments(new_parser)
 
     subparsers.add_parser("version", help="Show the version and exit")
 
@@ -320,13 +354,27 @@ def rollback(ctx) -> List[int]:
     return do_rollback(cluster, ctx)
 
 
+def create_migration(ctx) -> List[Path]:
+    created = MigrationStorage(ctx.migrations_dir).create(
+        ctx.name,
+        version=ctx.version,
+        with_down=ctx.down,
+    )
+    for path in created:
+        print(f"Created {path}")
+
+    return created
+
+
 def main() -> int:
     ctx = get_context(sys.argv[1:])
     if ctx.command == "version":
         print(f"clickhouse-migrations {__version__}")
         return 0
     try:
-        if ctx.command == "status":
+        if ctx.command == "new":
+            create_migration(ctx)
+        elif ctx.command == "status":
             show_status(ctx)
         elif ctx.command == "down":
             rollback(ctx)

@@ -233,3 +233,81 @@ def test_format_status_table():
     assert "VERSION" in out and "STATUS" in out
     assert "applied" in out and "pending" in out
     assert "2024-01-01 00:00:00" in out
+
+
+def test_new_subcommand_parses_without_db_arguments(tmp_path):
+    context = get_context(["new", "add events", "--dir", str(tmp_path)])
+
+    assert context.command == "new"
+    assert context.name == "add events"
+    assert context.migrations_dir == tmp_path
+    assert context.down is False
+    assert context.version is None
+    # Scaffolding is local only: no database arguments exist on this subcommand.
+    assert not hasattr(context, "db_host")
+    assert not hasattr(context, "db_url")
+
+
+def test_new_subcommand_rejects_db_arguments():
+    with pytest.raises(SystemExit):
+        get_context(["new", "add events", "--db-name", "x"])
+
+
+def test_new_subcommand_dir_defaults_to_migrations_dir_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("MIGRATIONS_DIR", str(tmp_path))
+
+    context = get_context(["new", "add events"])
+    assert context.migrations_dir == tmp_path
+
+    context = get_context(
+        ["new", "add events", "--migrations-dir", str(tmp_path / "x")]
+    )
+    assert context.migrations_dir == tmp_path / "x"
+
+
+def test_new_subcommand_flags():
+    context = get_context(["new", "add events", "--down", "--version", "7"])
+    assert context.down is True
+    assert context.version == 7
+
+
+def test_main_new_creates_file(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "clickhouse-migrations",
+            "new",
+            "add events",
+            "--dir",
+            str(tmp_path),
+            "--down",
+        ],
+    )
+
+    assert main() == 0
+
+    out = capsys.readouterr().out
+    assert str(tmp_path / "001_add_events.sql") in out
+    assert str(tmp_path / "001_add_events.down.sql") in out
+    assert (tmp_path / "001_add_events.sql").exists()
+    assert (tmp_path / "001_add_events.down.sql").exists()
+
+
+def test_main_new_returns_error_on_taken_version(monkeypatch, tmp_path):
+    (tmp_path / "001_init.sql").write_text("SELECT 1;", encoding="utf8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "clickhouse-migrations",
+            "new",
+            "add events",
+            "--dir",
+            str(tmp_path),
+            "--version",
+            "1",
+        ],
+    )
+
+    assert main() == 1
