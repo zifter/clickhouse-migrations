@@ -4,13 +4,26 @@ from collections import namedtuple
 from typing import Dict, List, Optional, Tuple
 
 from clickhouse_migrations.connection import Connection
+from clickhouse_migrations.defaults import MIGRATIONS_TABLE, MIGRATIONS_TABLE_ENGINE
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
-from clickhouse_migrations.util import quote_identifier
+from clickhouse_migrations.util import (
+    format_table_reference,
+    quote_identifier,
+    split_table_reference,
+)
 
 MIGRATION_LOG_FORMAT_FULL = "full"
 MIGRATION_LOG_FORMAT_COMPACT = "compact"
 MIGRATION_LOG_FORMATS = (MIGRATION_LOG_FORMAT_FULL, MIGRATION_LOG_FORMAT_COMPACT)
+
+# Engines used for the bookkeeping table when the user does not pass one.
+DEFAULT_TABLE_ENGINE = "MergeTree"
+# NB: {database}/{table}/{replica} are ClickHouse macros, not Python
+# placeholders - this literal is passed to the server as is.
+DEFAULT_REPLICATED_TABLE_ENGINE = (
+    "ReplicatedMergeTree('/clickhouse/tables/{database}/{table}', '{replica}')"
+)
 
 STATUS_APPLIED = "applied"
 STATUS_PENDING = "pending"
@@ -43,6 +56,8 @@ class Migrator:
         conn: Connection,
         dryrun: bool = False,
         migration_log_format: str = MIGRATION_LOG_FORMAT_FULL,
+        migrations_table: str = MIGRATIONS_TABLE,
+        migrations_table_engine: Optional[str] = MIGRATIONS_TABLE_ENGINE,
     ):
         if migration_log_format not in MIGRATION_LOG_FORMATS:
             raise ValueError(
@@ -53,34 +68,54 @@ class Migrator:
         self._conn: Connection = conn
         self._dryrun = dryrun
         self._migration_log_format = migration_log_format
+        self.migrations_table_database, self.migrations_table_name = (
+            split_table_reference(migrations_table)
+        )
+        self._table = format_table_reference(
+            self.migrations_table_database, self.migrations_table_name
+        )
+        self._migrations_table_engine = migrations_table_engine
 
     def init_schema(self, cluster_name: Optional[str] = None):
         if cluster_name is None:
-            schema = """CREATE TABLE IF NOT EXISTS schema_versions (
-    version UInt32,
-    md5 String,
-    script String,
-    created_at DateTime DEFAULT now()
-) ENGINE = MergeTree ORDER BY tuple(created_at)"""
+            on_cluster = ""
+            engine = self._migrations_table_engine or DEFAULT_TABLE_ENGINE
         else:
-            schema = f"""CREATE TABLE IF NOT EXISTS schema_versions ON CLUSTER {quote_identifier(cluster_name)} (
+            on_cluster = f" ON CLUSTER {quote_identifier(cluster_name)}"
+            engine = self._migrations_table_engine or DEFAULT_REPLICATED_TABLE_ENGINE
+
+        schema = f"""CREATE TABLE IF NOT EXISTS {self._table}{on_cluster} (
     version UInt32,
     md5 String,
     script String,
     created_at DateTime DEFAULT now()
-) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{database}}/{{table}}', '{{replica}}')
+) ENGINE = {engine}
 ORDER BY tuple(created_at)"""
 
-        self._conn.command(schema)
+        if self.migrations_table_database is None:
+            self._conn.command(schema)
+            return
+
+        # The bookkeeping table was pointed at another database, which we never
+        # create implicitly. Make the failure self-explanatory instead of
+        # surfacing a bare driver error.
+        try:
+            self._conn.command(schema)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise MigrationException(
+                f"Failed to create the migrations table {self._table}: {exc}. "
+                f"The database {quote_identifier(self.migrations_table_database)} "
+                "is not created automatically - create it first."
+            ) from exc
 
     def query_applied_migrations(self) -> List[Migration]:
         self.optimize_schema_table()
 
-        query = """SELECT DISTINCT
+        query = f"""SELECT DISTINCT
             version,
             script,
             md5
-        FROM schema_versions
+        FROM {self._table}
         ORDER BY version"""
 
         return [Migration(**row) for row in self._conn.query(query)]
@@ -137,7 +172,7 @@ ORDER BY tuple(created_at)"""
         rows = self._conn.query(
             "SELECT version, argMax(md5, created_at) AS md5, "
             "max(created_at) AS applied_at "
-            "FROM schema_versions GROUP BY version ORDER BY version"
+            f"FROM {self._table} GROUP BY version ORDER BY version"
         )
         return {row["version"]: (row["md5"], row["applied_at"]) for row in rows}
 
@@ -207,7 +242,7 @@ ORDER BY tuple(created_at)"""
             if fake:
                 logging.debug("update schema versions because fake option is enabled")
                 self._conn.command(
-                    "ALTER TABLE schema_versions "
+                    f"ALTER TABLE {self._table} "
                     f"DELETE WHERE version = {int(migration.version)}"
                 )
                 self._insert_schema_version(migration)
@@ -279,7 +314,7 @@ ORDER BY tuple(created_at)"""
                 )
             else:
                 self._conn.command(
-                    "ALTER TABLE schema_versions "
+                    f"ALTER TABLE {self._table} "
                     f"DELETE WHERE version = {int(version)} "
                     "SETTINGS mutations_sync = 2"
                 )
@@ -291,7 +326,7 @@ ORDER BY tuple(created_at)"""
 
     def _insert_schema_version(self, migration: Migration) -> None:
         self._conn.insert(
-            "schema_versions",
+            self._table,
             [
                 {
                     "version": migration.version,
@@ -302,7 +337,7 @@ ORDER BY tuple(created_at)"""
         )
 
     def optimize_schema_table(self):
-        self._conn.command("OPTIMIZE TABLE schema_versions FINAL")
+        self._conn.command(f"OPTIMIZE TABLE {self._table} FINAL")
 
     @classmethod
     def script_to_statements(cls, script: str, multi_statement: bool) -> List[str]:

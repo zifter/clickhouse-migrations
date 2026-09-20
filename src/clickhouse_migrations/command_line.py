@@ -14,6 +14,8 @@ from clickhouse_migrations.defaults import (
     DB_PASSWORD,
     DB_USER,
     MIGRATIONS_DIR,
+    MIGRATIONS_TABLE,
+    MIGRATIONS_TABLE_ENGINE,
 )
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration, MigrationStorage
@@ -97,6 +99,20 @@ def _add_common_arguments(parser):
         "--cluster-name",
         default=os.environ.get("CLUSTER_NAME", None),
         help="Clickhouse topology cluster",
+    )
+    parser.add_argument(
+        "--migrations-table",
+        default=os.environ.get("MIGRATIONS_TABLE", MIGRATIONS_TABLE),
+        help="Table where applied migrations are recorded. "
+        "Accepts a 'database.table' form to keep it in another database "
+        f"(default: {MIGRATIONS_TABLE})",
+    )
+    parser.add_argument(
+        "--migrations-table-engine",
+        default=os.environ.get("MIGRATIONS_TABLE_ENGINE", MIGRATIONS_TABLE_ENGINE),
+        help="Full engine clause for the migrations table, e.g. "
+        "\"ReplicatedMergeTree('/ch/{shard}/tables/{database}/{table}', '{replica}')\". "
+        "Passed through as is and wins over the --cluster-name default",
     )
     parser.add_argument(
         "--log-level",
@@ -267,6 +283,8 @@ def create_cluster(ctx) -> ClickhouseCluster:
         db_url=ctx.db_url,
         secure=ctx.secure,
         driver=ctx.driver,
+        migrations_table=ctx.migrations_table,
+        migrations_table_engine=ctx.migrations_table_engine,
     )
 
 
@@ -286,7 +304,7 @@ def do_migrate(cluster, ctx) -> List[Migration]:
 
 def do_query_applied_migrations(cluster, ctx) -> List[Migration]:
     with cluster.connection(ctx.db_name) as conn:
-        migrator = Migrator(conn, True)
+        migrator = Migrator(conn, True, migrations_table=ctx.migrations_table)
         return migrator.query_applied_migrations()
 
 

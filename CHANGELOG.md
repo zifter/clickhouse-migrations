@@ -4,6 +4,7 @@
 
 **What's Changed:**
 - Add a `new` subcommand that scaffolds the next migration file (`clickhouse-migrations new "add events"` → `migrations/004_add_events.sql`), with `--down` for the paired rollback file, `--version` to force a version and `--dir` to pick the directory. It is purely local and never connects to ClickHouse. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/86. Closes #74.
+- Make the migrations table configurable: `--migrations-table` / `MIGRATIONS_TABLE` (accepts a `database.table` form) and `--migrations-table-engine` / `MIGRATIONS_TABLE_ENGINE` (a full engine clause, passed through verbatim, which wins over the `--cluster-name` default). This unblocks `Replicated` database engines and custom ZooKeeper layouts. Defaults are unchanged. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/87. Closes #76.
 
 
 ## [v0.13.0](https://github.com/zifter/clickhouse-migrations/tree/v0.13.0) (2026-07-08)
