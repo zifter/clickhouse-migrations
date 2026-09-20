@@ -29,6 +29,7 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 * **Run anywhere** — CLI, Python API, [GitHub Action](#in-ci-github-action), or [Docker image](#with-docker)
 * **Two drivers** — native `clickhouse-driver` (TCP) or official `clickhouse-connect` (HTTP)
 * **Inspect before you apply** — [`status`](#migration-status) and `--dry-run` show applied vs pending migrations without touching data
+* **Scaffolding** — [`new`](#creating-a-migration) creates the next migration file for you, offline
 * **Naive rollbacks** — optional paired [`{VERSION}_{name}.down.sql`](#rollbacks-down-migrations) files and a `down` subcommand to reverse applied migrations
 
 ## Known alternatives
@@ -110,6 +111,28 @@ CLI flag | Environment variable | Default
 `--log-level` | `LOG_LEVEL` | `WARNING`
 `--migration-log-format` | `MIGRATION_LOG_FORMAT` | `full`
 `--driver` | `DRIVER` | `clickhouse-driver`
+
+### Creating a migration
+
+Create the next migration file with the `new` subcommand instead of counting file names by eye:
+
+```bash
+clickhouse-migrations new "add events"
+# Created migrations/004_add_events.sql
+
+clickhouse-migrations new "add events" --down
+# Created migrations/004_add_events.sql
+# Created migrations/004_add_events.down.sql
+```
+
+The version is the highest existing one plus one, zero-padded to the width of the widest existing file (`003` when the directory is empty), and the name is slugified (lowercase, non-alphanumerics collapsed into `_`). Each file gets a two-line header comment and nothing else.
+
+```bash
+clickhouse-migrations new "add events" --dir ./db/migrations   # defaults to --migrations-dir / MIGRATIONS_DIR
+clickhouse-migrations new "add events" --version 42            # force a version; fails if it is taken
+```
+
+This subcommand is purely local: it **never connects to ClickHouse** and therefore takes none of the `--db-*` options. The migrations directory is created if it does not exist.
 
 ### Migration status
 
