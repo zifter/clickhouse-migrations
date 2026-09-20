@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased](https://github.com/zifter/clickhouse-migrations/compare/v0.13.0...main)
+
+**What's Changed:**
+- Add a `new` subcommand that scaffolds the next migration file (`clickhouse-migrations new "add events"` → `migrations/004_add_events.sql`), with `--down` for the paired rollback file, `--version` to force a version and `--dir` to pick the directory. It is purely local and never connects to ClickHouse. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/86. Closes #74.
+
+
 ## [v0.13.0](https://github.com/zifter/clickhouse-migrations/tree/v0.13.0) (2026-07-08)
 
 [Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.12.0...v0.13.0)

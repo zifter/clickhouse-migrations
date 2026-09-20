@@ -16,7 +16,10 @@
 ```bash
 pip install clickhouse-migrations
 
-# put versioned .sql files in ./migrations (e.g. 001_init.sql), then apply them:
+# create a migration file (./migrations/001_init.sql), then write your SQL into it:
+clickhouse-migrations new "init" --dir ./migrations
+
+# apply every pending migration:
 clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migrations
 ```
 
@@ -55,7 +58,7 @@ With `clickhouse-connect` the default port is `8123` (HTTP). Connecting via `--d
 
 ## Migration files
 
-Migration files follow the naming convention `{VERSION}_{name}.sql`, e.g. `001_init.sql`, `002_add_users.sql`.
+Migration files follow the naming convention `{VERSION}_{name}.sql`, e.g. `001_init.sql`, `002_add_users.sql`. Versions are plain integers applied in ascending order; [`new`](#creating-a-migration) picks the next one for you.
 
 Each file contains one or more SQL statements separated by semicolons:
 
@@ -72,6 +75,7 @@ ALTER TABLE mydb.events ADD COLUMN created_at DateTime DEFAULT now();
 
 Optionally, add a paired rollback file `{VERSION}_{name}.down.sql` next to a migration
 (e.g. `001_init.down.sql`) to make it reversible — see [Rollbacks](#rollbacks-down-migrations).
+`clickhouse-migrations new "<name>" --down` creates both files at once.
 
 ## Usage
 
@@ -132,7 +136,13 @@ clickhouse-migrations new "add events" --dir ./db/migrations   # defaults to --m
 clickhouse-migrations new "add events" --version 42            # force a version; fails if it is taken
 ```
 
-This subcommand is purely local: it **never connects to ClickHouse** and therefore takes none of the `--db-*` options. The migrations directory is created if it does not exist.
+CLI flag | Environment variable | Default
+---------|---------------------|--------
+`--dir` (alias `--migrations-dir`) | `MIGRATIONS_DIR` | `./migrations`
+`--down` | — | `false`
+`--version` | — | *(next available)*
+
+This subcommand is purely local: it **never connects to ClickHouse** and therefore takes none of the `--db-*` options. The migrations directory is created if it does not exist. A version is considered taken if either the migration or its `.down.sql` file already uses it.
 
 ### Migration status
 
