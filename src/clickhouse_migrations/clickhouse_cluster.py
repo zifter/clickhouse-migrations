@@ -13,11 +13,21 @@ from clickhouse_migrations.connection import (
     Connection,
     import_clickhouse_connect,
 )
-from clickhouse_migrations.defaults import DB_HOST, DB_PASSWORD, DB_USER
+from clickhouse_migrations.defaults import (
+    DB_HOST,
+    DB_PASSWORD,
+    DB_USER,
+    MIGRATIONS_TABLE,
+    MIGRATIONS_TABLE_ENGINE,
+)
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import STATUS_PENDING, Migrator, StatusRow
-from clickhouse_migrations.util import quote_identifier, quote_string
+from clickhouse_migrations.util import (
+    quote_identifier,
+    quote_string,
+    split_table_reference,
+)
 
 
 class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
@@ -31,12 +41,16 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         db_name: Optional[str] = None,
         secure: bool = False,
         driver: str = CLICKHOUSE_DRIVER,
+        migrations_table: str = MIGRATIONS_TABLE,
+        migrations_table_engine: Optional[str] = MIGRATIONS_TABLE_ENGINE,
         **kwargs,
     ):
         self.db_url: Optional[str] = None
         self.default_db_name: Optional[str] = db_name
         self.secure: bool = secure
         self.driver: str = driver
+        self.migrations_table: str = migrations_table
+        self.migrations_table_engine: Optional[str] = migrations_table_engine
         self.connection_kwargs = kwargs
         self._parsed_url = None
 
@@ -103,6 +117,39 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             )
         return ClickhouseDriverConnection(ch_client)
 
+    def _migrator(
+        self,
+        conn: Connection,
+        dryrun: bool = False,
+        migration_log_format: str = "full",
+    ) -> Migrator:
+        return Migrator(
+            conn,
+            dryrun,
+            migration_log_format=migration_log_format,
+            migrations_table=self.migrations_table,
+            migrations_table_engine=self.migrations_table_engine,
+        )
+
+    def _is_initialized(self, db_name: Optional[str]) -> bool:
+        """Whether the bookkeeping table already exists.
+
+        The table may live in another database than the migrated one, so the
+        probe respects the database part of a "db.table" value.
+        """
+        table_db, table_name = split_table_reference(self.migrations_table)
+        if table_db is None:
+            table_db = db_name
+
+        with self.connection("") as conn:
+            return bool(
+                conn.query(
+                    "SELECT count() AS n FROM system.tables "
+                    f"WHERE database = {quote_string(table_db)} "
+                    f"AND name = {quote_string(table_name)}"
+                )[0]["n"]
+            )
+
     def create_db(
         self, db_name: Optional[str] = None, cluster_name: Optional[str] = None
     ):
@@ -125,7 +172,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         db_name = db_name if db_name is not None else self.default_db_name
 
         with self.connection(db_name) as conn:
-            migrator = Migrator(conn)
+            migrator = self._migrator(conn)
             migrator.init_schema(cluster_name)
 
     def show_tables(self, db_name):
@@ -175,17 +222,11 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
 
         # Read-only: never create the database or the schema table. If the
         # schema table is missing, nothing has been applied yet.
-        with self.connection("") as conn:
-            initialized = conn.query(
-                "SELECT count() AS n FROM system.tables "
-                f"WHERE database = {quote_string(db_name)} AND name = 'schema_versions'"
-            )[0]["n"]
-
-        if not initialized:
+        if not self._is_initialized(db_name):
             return [StatusRow(m.version, STATUS_PENDING, m.md5, None) for m in incoming]
 
         with self.connection(db_name) as conn:
-            return Migrator(conn).migration_status(incoming)
+            return self._migrator(conn).migration_status(incoming)
 
     def rollback(
         self,
@@ -202,17 +243,11 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
 
         # Read-only pre-check: if the schema table is missing, nothing has been
         # applied yet, so there is nothing to roll back.
-        with self.connection("") as conn:
-            initialized = conn.query(
-                "SELECT count() AS n FROM system.tables "
-                f"WHERE database = {quote_string(db_name)} AND name = 'schema_versions'"
-            )[0]["n"]
-
-        if not initialized:
+        if not self._is_initialized(db_name):
             return []
 
         with self.connection(db_name) as conn:
-            migrator = Migrator(conn, dryrun)
+            migrator = self._migrator(conn, dryrun)
             return migrator.rollback_migration(
                 down_scripts,
                 steps=steps,
@@ -238,6 +273,8 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
                 self.create_db(db_name, cluster_name)
 
         with self.connection(db_name) as conn:
-            migrator = Migrator(conn, dryrun, migration_log_format=migration_log_format)
+            migrator = self._migrator(
+                conn, dryrun, migration_log_format=migration_log_format
+            )
             migrator.init_schema(cluster_name)
             return migrator.apply_migration(migrations, multi_statement, fake=fake)

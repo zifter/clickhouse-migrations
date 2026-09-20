@@ -294,3 +294,135 @@ def test_rollback_dry_run_executes_nothing():
     assert rolled == [2]
     assert not any("DROP TABLE" in c for c in conn.commands)
     assert not any("DELETE WHERE version" in c for c in conn.commands)
+
+
+class _RecordingConn:
+    """Connection stub that records every statement, query and insert."""
+
+    def __init__(self, rows=None):
+        self.commands = []
+        self.inserts = []
+        self.queries = []
+        self._rows = rows or []
+
+    def command(self, statement):
+        self.commands.append(statement)
+
+    def query(self, statement):
+        self.queries.append(statement)
+        return self._rows
+
+    def insert(self, table, rows):
+        self.inserts.append((table, rows))
+
+
+class _FailingConn(_RecordingConn):
+    def command(self, statement):
+        super().command(statement)
+        raise RuntimeError("Code: 81. DB::Exception: Database meta does not exist")
+
+
+def test_default_schema_table_is_schema_versions():
+    conn = _RecordingConn()
+    Migrator(conn).init_schema()
+
+    assert len(conn.commands) == 1
+    ddl = conn.commands[0]
+    assert ddl.startswith('CREATE TABLE IF NOT EXISTS "schema_versions" (')
+    assert "ENGINE = MergeTree" in ddl
+    assert "ON CLUSTER" not in ddl
+
+
+def test_default_cluster_schema_keeps_zookeeper_path():
+    conn = _RecordingConn()
+    Migrator(conn).init_schema("company_cluster")
+
+    ddl = conn.commands[0]
+    assert 'ON CLUSTER "company_cluster"' in ddl
+    assert (
+        "ENGINE = ReplicatedMergeTree('/clickhouse/tables/{database}/{table}', "
+        "'{replica}')" in ddl
+    )
+
+
+def test_custom_table_name_is_quoted_everywhere():
+    conn = _RecordingConn()
+    migrator = Migrator(conn, migrations_table="my_versions")
+
+    migrator.init_schema()
+    migrator.optimize_schema_table()
+    migrator.query_applied_migrations()
+    migrator.rollback_migration({}, to_version=0)
+    migrator._insert_schema_version(  # pylint: disable=protected-access
+        Migration(version=1, md5="a", script="s")
+    )
+
+    assert 'CREATE TABLE IF NOT EXISTS "my_versions" (' in conn.commands[0]
+    assert 'OPTIMIZE TABLE "my_versions" FINAL' in conn.commands
+    assert all('"my_versions"' in q for q in conn.queries)
+    assert conn.inserts[0][0] == '"my_versions"'
+
+
+def test_db_table_value_is_split_and_quoted():
+    conn = _RecordingConn()
+    migrator = Migrator(conn, migrations_table="meta.my_versions")
+
+    assert migrator.migrations_table_database == "meta"
+    assert migrator.migrations_table_name == "my_versions"
+
+    migrator.init_schema()
+    assert 'CREATE TABLE IF NOT EXISTS "meta"."my_versions" (' in conn.commands[0]
+
+
+def test_quoted_db_table_value_is_unquoted_before_requoting():
+    migrator = Migrator(_RecordingConn(), migrations_table='"my.db".`my.table`')
+
+    assert migrator.migrations_table_database == "my.db"
+    assert migrator.migrations_table_name == "my.table"
+
+
+def test_custom_engine_wins_over_cluster_default():
+    conn = _RecordingConn()
+    engine = "ReplicatedMergeTree('/ch/{shard}/tables/{database}/{table}', '{replica}')"
+    Migrator(conn, migrations_table_engine=engine).init_schema("company_cluster")
+
+    ddl = conn.commands[0]
+    assert f"ENGINE = {engine}" in ddl
+    assert 'ON CLUSTER "company_cluster"' in ddl
+    assert "/clickhouse/tables/" not in ddl
+
+
+def test_custom_engine_is_used_without_cluster():
+    conn = _RecordingConn()
+    Migrator(conn, migrations_table_engine="Memory").init_schema()
+
+    assert "ENGINE = Memory" in conn.commands[0]
+
+
+def test_init_schema_in_another_database_explains_failure():
+    migrator = Migrator(_FailingConn(), migrations_table="meta.my_versions")
+
+    with pytest.raises(MigrationException, match="is not created automatically"):
+        migrator.init_schema()
+
+
+def test_init_schema_in_migrated_database_does_not_wrap_error():
+    migrator = Migrator(_FailingConn())
+
+    with pytest.raises(RuntimeError):
+        migrator.init_schema()
+
+
+def test_fake_migration_deletes_from_the_custom_table():
+    conn = _RecordingConn()
+    migrator = Migrator(conn, migrations_table="meta.my_versions")
+
+    migrator.apply_migration(
+        [Migration(version=1, md5="a", script="SELECT 1")], True, fake=True
+    )
+
+    assert any(
+        'ALTER TABLE "meta"."my_versions" DELETE WHERE version = 1' in c
+        for c in conn.commands
+    )
+    assert conn.inserts[0][0] == '"meta"."my_versions"'

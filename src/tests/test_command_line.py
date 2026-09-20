@@ -311,3 +311,53 @@ def test_main_new_returns_error_on_taken_version(monkeypatch, tmp_path):
     )
 
     assert main() == 1
+
+
+def test_migrations_table_args_default_to_legacy_values():
+    context = get_context([])
+
+    assert context.migrations_table == "schema_versions"
+    assert context.migrations_table_engine is None
+
+
+@pytest.mark.parametrize("command", ["migrate", "status", "down"])
+def test_migrations_table_args_available_on_every_db_subcommand(command):
+    engine = "ReplicatedMergeTree('/ch/{shard}/{database}/{table}', '{replica}')"
+    context = get_context(
+        [
+            command,
+            "--migrations-table",
+            "meta.my_versions",
+            "--migrations-table-engine",
+            engine,
+        ]
+    )
+
+    assert context.migrations_table == "meta.my_versions"
+    assert context.migrations_table_engine == engine
+
+
+def test_migrations_table_args_default_from_env(monkeypatch):
+    monkeypatch.setenv("MIGRATIONS_TABLE", "meta.my_versions")
+    monkeypatch.setenv("MIGRATIONS_TABLE_ENGINE", "Memory")
+
+    context = get_context([])
+
+    assert context.migrations_table == "meta.my_versions"
+    assert context.migrations_table_engine == "Memory"
+
+
+def test_create_cluster_passes_migrations_table_options():
+    context = get_context(
+        [
+            "--migrations-table",
+            "meta.my_versions",
+            "--migrations-table-engine",
+            "Memory",
+        ]
+    )
+
+    cluster = command_line.create_cluster(context)
+
+    assert cluster.migrations_table == "meta.my_versions"
+    assert cluster.migrations_table_engine == "Memory"

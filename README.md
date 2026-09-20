@@ -33,6 +33,7 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 * **Two drivers** — native `clickhouse-driver` (TCP) or official `clickhouse-connect` (HTTP)
 * **Inspect before you apply** — [`status`](#migration-status) and `--dry-run` show applied vs pending migrations without touching data
 * **Scaffolding** — [`new`](#creating-a-migration) creates the next migration file for you, offline
+* **Configurable bookkeeping** — [rename the migrations table](#the-migrations-table) or set its engine (`--migrations-table` / `--migrations-table-engine`)
 * **Naive rollbacks** — optional paired [`{VERSION}_{name}.down.sql`](#rollbacks-down-migrations) files and a `down` subcommand to reverse applied migrations
 
 ## Known alternatives
@@ -107,6 +108,8 @@ CLI flag | Environment variable | Default
 `--db-url` | `DB_URL` | —
 `--migrations-dir` | `MIGRATIONS_DIR` | `./migrations`
 `--cluster-name` | `CLUSTER_NAME` | —
+`--migrations-table` | `MIGRATIONS_TABLE` | `schema_versions`
+`--migrations-table-engine` | `MIGRATIONS_TABLE_ENGINE` | —
 `--multi-statement` | `MULTI_STATEMENT` | `true`
 `--create-db-if-not-exists` | `CREATE_DB_IF_NOT_EXISTS` | `true`
 `--dry-run` | `DRY_RUN` | `false`
@@ -226,12 +229,40 @@ Parameter | Description | Default
 `migration_path` | Path to directory with migration files | `./migrations`
 `explicit_migrations` | Explicit list of migrations to apply | `[]`
 `cluster_name` | Name of ClickHouse topology cluster from `<remote_servers>` | —
+`migrations_table` | Table recording applied migrations; accepts `database.table` | `schema_versions`
+`migrations_table_engine` | Full engine clause for that table, used verbatim | —
 `create_db_if_no_exists` | Create the database if it does not exist | `True`
 `multi_statement` | Allow multiple statements per migration file | `True`
 `dryrun` | Print migrations without executing them | `False`
 `fake` | Mark migrations as applied without executing SQL | `False`
 `secure` | Use secure (TLS) connection | `False`
 `migration_log_format` | Migration log format `full` logs the full Migration object, `compact` logs only version and md5 | `full`
+
+### The migrations table
+
+Applied migrations are recorded in a bookkeeping table, by default `schema_versions` in the migrated database, with `ENGINE = MergeTree` (or `ReplicatedMergeTree('/clickhouse/tables/{database}/{table}', '{replica}')` when `--cluster-name` is set).
+
+Both the name and the engine are configurable:
+
+```bash
+# rename it, or keep it in a dedicated database (that database is NOT created for you)
+clickhouse-migrations --migrations-table meta.my_versions ...
+
+# take full control of the engine clause, e.g. a different ZooKeeper layout
+clickhouse-migrations --cluster-name company_cluster \
+    --migrations-table-engine "ReplicatedMergeTree('/ch/{shard}/tables/{database}/{table}', '{replica}')" ...
+```
+
+CLI flag | Environment variable | Default
+---------|---------------------|--------
+`--migrations-table` | `MIGRATIONS_TABLE` | `schema_versions`
+`--migrations-table-engine` | `MIGRATIONS_TABLE_ENGINE` | *(MergeTree / ReplicatedMergeTree)*
+
+`--migrations-table` accepts a `database.table` form so the table can live outside the migrated database; a bare name means the migrated database. Both parts are quoted, so names with dots work when you quote them yourself (`"my.db".versions`). The database is **never created implicitly** — create it first, otherwise the run fails with an explicit error.
+
+`--migrations-table-engine` is a **full engine clause** passed to the `CREATE TABLE` verbatim, with no validation, and it wins over the engine derived from `--cluster-name`. `{database}`, `{table}`, `{shard}` and `{replica}` in it are ClickHouse macros, expanded by the server.
+
+> **`Replicated` database engine caveat:** a database created with `ENGINE = Replicated(...)` injects its own ZooKeeper path and replica arguments into every `ReplicatedMergeTree` table, and conflicts with an explicit path. There, set `--migrations-table-engine "ReplicatedMergeTree"` (no arguments) and leave `--cluster-name` unset — the database engine replicates the DDL itself.
 
 ### In CI (GitHub Action)
 

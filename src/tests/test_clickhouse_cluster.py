@@ -2,7 +2,12 @@ import pytest
 
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.exceptions import MigrationException
-from clickhouse_migrations.util import quote_identifier
+from clickhouse_migrations.util import (
+    format_table_reference,
+    quote_identifier,
+    quote_string,
+    split_table_reference,
+)
 
 
 def _native(cluster, db_name):
@@ -96,3 +101,64 @@ def test_quote_identifier_wraps_in_double_quotes():
 
 def test_quote_identifier_escapes_embedded_quote():
     assert quote_identifier('a"b') == '"a""b"'
+
+
+def test_quote_string_escapes_quotes_and_backslashes():
+    assert quote_string("a'b\\c") == "'a\\'b\\\\c'"
+
+
+@pytest.mark.parametrize(
+    "reference,expected",
+    [
+        ("schema_versions", (None, "schema_versions")),
+        ("meta.schema_versions", ("meta", "schema_versions")),
+        ('"my.db".events', ("my.db", "events")),
+        ('meta."my.table"', ("meta", "my.table")),
+        ("`meta`.`events`", ("meta", "events")),
+        # Split on the LAST unquoted dot.
+        ("a.b.c", ("a.b", "c")),
+        # A doubled quote inside a quoted identifier is an escaped quote.
+        ('"a""b".t', ('a"b', "t")),
+    ],
+)
+def test_split_table_reference(reference, expected):
+    assert split_table_reference(reference) == expected
+
+
+@pytest.mark.parametrize("reference", ["", "meta.", ".events", '"".events'])
+def test_split_table_reference_rejects_empty_parts(reference):
+    with pytest.raises(MigrationException, match="Invalid table name"):
+        split_table_reference(reference)
+
+
+@pytest.mark.parametrize(
+    "database,table,expected",
+    [
+        (None, "schema_versions", '"schema_versions"'),
+        ("meta", "schema_versions", '"meta"."schema_versions"'),
+        ('my"db', 'my"table', '"my""db"."my""table"'),
+    ],
+)
+def test_format_table_reference(database, table, expected):
+    assert format_table_reference(database, table) == expected
+
+
+def test_cluster_defaults_keep_the_legacy_table():
+    cluster = ClickhouseCluster(db_host="localhost")
+
+    assert cluster.migrations_table == "schema_versions"
+    assert cluster.migrations_table_engine is None
+
+
+def test_cluster_passes_table_options_to_the_migrator():
+    # pylint: disable=protected-access
+    cluster = ClickhouseCluster(
+        db_host="localhost",
+        migrations_table="meta.my_versions",
+        migrations_table_engine="Memory",
+    )
+    migrator = cluster._migrator(None)
+
+    assert migrator.migrations_table_database == "meta"
+    assert migrator.migrations_table_name == "my_versions"
+    assert migrator._migrations_table_engine == "Memory"
