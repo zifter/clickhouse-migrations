@@ -1,10 +1,11 @@
 import argparse
+import json
 import logging
 import os
 import sys
 from argparse import ArgumentParser
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from clickhouse_migrations import __version__
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
@@ -19,7 +20,14 @@ from clickhouse_migrations.defaults import (
 )
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration, MigrationStorage
-from clickhouse_migrations.migrator import MIGRATION_LOG_FORMATS, Migrator, StatusRow
+from clickhouse_migrations.migrator import (
+    MIGRATION_LOG_FORMATS,
+    STATUS_MD5_MISMATCH,
+    STATUS_PENDING,
+    STATUS_UNKNOWN,
+    Migrator,
+    StatusRow,
+)
 
 
 def log_level(value: str) -> str:
@@ -47,6 +55,10 @@ def migration_log_format(value: str) -> str:
 def cast_to_bool(value: str):
     return value.lower() in ("1", "true", "yes", "y")
 
+
+STATUS_FORMAT_TABLE = "table"
+STATUS_FORMAT_JSON = "json"
+STATUS_FORMATS = (STATUS_FORMAT_TABLE, STATUS_FORMAT_JSON)
 
 SUBCOMMANDS = ("migrate", "status", "down", "new", "version")
 
@@ -188,6 +200,27 @@ def _add_migrate_target_argument(parser):
     )
 
 
+def _add_status_arguments(parser):
+    parser.add_argument(
+        "--strict",
+        default=cast_to_bool(os.environ.get("STRICT", "0")),
+        action=argparse.BooleanOptionalAction,
+        help="Exit with code 1 if any migration is md5-mismatch or unknown",
+    )
+    parser.add_argument(
+        "--exit-code-pending",
+        default=cast_to_bool(os.environ.get("EXIT_CODE_PENDING", "0")),
+        action=argparse.BooleanOptionalAction,
+        help="Exit with code 1 if any migration is pending",
+    )
+    parser.add_argument(
+        "--format",
+        default=os.environ.get("STATUS_FORMAT", STATUS_FORMAT_TABLE),
+        choices=STATUS_FORMATS,
+        help="Output format: table or json (json prints only the JSON document to stdout)",
+    )
+
+
 def _add_down_arguments(parser):
     parser.add_argument(
         "--steps",
@@ -266,6 +299,7 @@ def get_context(args):
         "status", help="Show applied vs pending migrations without applying anything"
     )
     _add_common_arguments(status_parser)
+    _add_status_arguments(status_parser)
 
     down_parser = subparsers.add_parser(
         "down",
@@ -354,7 +388,7 @@ def format_status(rows: List[StatusRow]) -> str:
     if not rows:
         return "No migrations found."
 
-    table = [("VERSION", "STATUS", "MD5", "APPLIED AT")]
+    table = [("VERSION", "STATUS", "MD5", "APPLIED AT", "HAS DOWN")]
     for row in rows:
         table.append(
             (
@@ -362,6 +396,7 @@ def format_status(rows: List[StatusRow]) -> str:
                 row.state,
                 row.md5 or "",
                 str(row.applied_at) if row.applied_at is not None else "",
+                "yes" if row.has_down else "no",
             )
         )
 
@@ -369,6 +404,45 @@ def format_status(rows: List[StatusRow]) -> str:
     return "\n".join(
         "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)) for row in table
     )
+
+
+def _isoformat(value) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def format_status_json(db_name: str, rows: List[StatusRow]) -> str:
+    return json.dumps(
+        {
+            "database": db_name,
+            "migrations": [
+                {
+                    "version": row.version,
+                    "state": row.state,
+                    "md5": row.md5,
+                    "applied_at": _isoformat(row.applied_at),
+                    "has_down": bool(row.has_down),
+                }
+                for row in rows
+            ],
+        },
+        indent=2,
+    )
+
+
+def status_exit_code(
+    rows: List[StatusRow], strict: bool = False, exit_code_pending: bool = False
+) -> int:
+    failing = set()
+    if strict:
+        failing.update((STATUS_MD5_MISMATCH, STATUS_UNKNOWN))
+    if exit_code_pending:
+        failing.add(STATUS_PENDING)
+
+    return 1 if any(row.state in failing for row in rows) else 0
 
 
 def migrate(ctx) -> List[Migration]:
@@ -379,13 +453,18 @@ def migrate(ctx) -> List[Migration]:
     return migrations
 
 
-def show_status(ctx) -> List[StatusRow]:
+def show_status(ctx) -> int:
+    # basicConfig logs to stderr, so stdout stays clean for --format json.
     logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
 
     cluster = create_cluster(ctx)
     rows = do_status(cluster, ctx)
-    print(format_status(rows))
-    return rows
+    if ctx.format == STATUS_FORMAT_JSON:
+        db_name = ctx.db_name if ctx.db_name is not None else cluster.default_db_name
+        print(format_status_json(db_name, rows))
+    else:
+        print(format_status(rows))
+    return status_exit_code(rows, ctx.strict, ctx.exit_code_pending)
 
 
 def rollback(ctx) -> List[int]:
@@ -416,7 +495,7 @@ def main() -> int:
         if ctx.command == "new":
             create_migration(ctx)
         elif ctx.command == "status":
-            show_status(ctx)
+            return show_status(ctx)
         elif ctx.command == "down":
             rollback(ctx)
         else:

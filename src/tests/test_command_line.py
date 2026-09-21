@@ -1,5 +1,7 @@
+import json
 import sys
 import types
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -8,8 +10,11 @@ from clickhouse_migrations import __version__, command_line
 from clickhouse_migrations.command_line import (
     cast_to_bool,
     format_status,
+    format_status_json,
     get_context,
     main,
+    show_status,
+    status_exit_code,
 )
 from clickhouse_migrations.migrator import StatusRow
 
@@ -392,3 +397,145 @@ def test_do_migrate_passes_to_version():
     command_line.do_migrate(cluster, get_context(["--to", "4"]))
 
     assert calls[0]["to_version"] == 4
+
+
+def _status_rows():
+    return {
+        "applied": StatusRow(1, "applied", "a1", datetime(2024, 1, 1, 12), True),
+        "pending": StatusRow(2, "pending", "b2", None, False),
+        "md5-mismatch": StatusRow(3, "md5-mismatch", "c3", datetime(2024, 1, 3), True),
+        "unknown": StatusRow(4, "unknown", "d4", "2024-01-04 00:00:00", False),
+    }
+
+
+def test_status_flags_defaults(monkeypatch):
+    for name in ("STRICT", "EXIT_CODE_PENDING", "STATUS_FORMAT"):
+        monkeypatch.delenv(name, raising=False)
+    context = get_context(["status"])
+    assert context.strict is False
+    assert context.exit_code_pending is False
+    assert context.format == "table"
+
+
+def test_status_flags_from_cli_and_env(monkeypatch):
+    context = get_context(
+        ["status", "--strict", "--exit-code-pending", "--format", "json"]
+    )
+    assert context.strict and context.exit_code_pending
+    assert context.format == "json"
+
+    monkeypatch.setenv("STRICT", "1")
+    monkeypatch.setenv("EXIT_CODE_PENDING", "true")
+    monkeypatch.setenv("STATUS_FORMAT", "json")
+    context = get_context(["status"])
+    assert context.strict and context.exit_code_pending
+    assert context.format == "json"
+    assert get_context(["status", "--no-strict"]).strict is False
+
+
+def test_status_flags_rejected_for_other_subcommands():
+    for command in ("migrate", "down"):
+        with pytest.raises(SystemExit):
+            get_context([command, "--strict"])
+    with pytest.raises(SystemExit):
+        get_context(["status", "--format", "xml"])
+
+
+@pytest.mark.parametrize(
+    "state,strict,pending,expected",
+    [
+        ("applied", True, True, 0),
+        ("pending", False, False, 0),
+        ("pending", True, False, 0),
+        ("pending", False, True, 1),
+        ("pending", True, True, 1),
+        ("md5-mismatch", False, False, 0),
+        ("md5-mismatch", True, False, 1),
+        ("md5-mismatch", False, True, 0),
+        ("md5-mismatch", True, True, 1),
+        ("unknown", False, False, 0),
+        ("unknown", True, False, 1),
+        ("unknown", False, True, 0),
+        ("unknown", True, True, 1),
+    ],
+)
+def test_status_exit_code(state, strict, pending, expected):
+    rows = [_status_rows()["applied"], _status_rows()[state]]
+    assert status_exit_code(rows, strict, pending) == expected
+
+
+def test_status_exit_code_defaults_and_empty():
+    assert status_exit_code(list(_status_rows().values())) == 0
+    assert status_exit_code([], True, True) == 0
+
+
+def test_format_status_table_has_down_column():
+    out = format_status(list(_status_rows().values()))
+    lines = out.splitlines()
+    assert lines[0].split()[-2:] == ["HAS", "DOWN"]
+    assert [line.split()[-1] for line in lines[1:]] == ["yes", "no", "yes", "no"]
+
+
+def test_format_status_json_shape():
+    rows = list(_status_rows().values())
+
+    doc = json.loads(format_status_json("test", rows))
+
+    assert list(doc) == ["database", "migrations"]
+    assert doc["database"] == "test"
+    assert doc["migrations"][0] == {
+        "version": 1,
+        "state": "applied",
+        "md5": "a1",
+        "applied_at": "2024-01-01T12:00:00",
+        "has_down": True,
+    }
+    assert doc["migrations"][1]["applied_at"] is None
+    assert doc["migrations"][1]["has_down"] is False
+    assert doc["migrations"][2]["applied_at"] == "2024-01-03T00:00:00"
+    assert doc["migrations"][3]["applied_at"] == "2024-01-04 00:00:00"
+    assert json.loads(format_status_json("test", []))["migrations"] == []
+
+
+@pytest.mark.parametrize("fmt", ["table", "json"])
+@pytest.mark.parametrize("state", ["applied", "pending", "md5-mismatch", "unknown"])
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize("pending", [False, True])
+def test_main_status_matrix(monkeypatch, capsys, fmt, state, strict, pending):
+    rows = [_status_rows()[state]]
+    monkeypatch.setattr(command_line, "create_cluster", lambda ctx: _FakeCluster())
+    monkeypatch.setattr(command_line, "do_status", lambda cluster, ctx: rows)
+    argv = ["clickhouse-migrations", "status", "--db-name", "test", "--format", fmt]
+    if strict:
+        argv.append("--strict")
+    if pending:
+        argv.append("--exit-code-pending")
+    monkeypatch.setattr(sys, "argv", argv)
+
+    code = main()
+
+    expected = 0
+    if strict and state in ("md5-mismatch", "unknown"):
+        expected = 1
+    if pending and state == "pending":
+        expected = 1
+    assert code == expected
+    out = capsys.readouterr().out
+    if fmt == "json":
+        assert json.loads(out)["migrations"][0]["state"] == state
+    else:
+        assert state in out
+
+
+def test_show_status_json_falls_back_to_default_db_name(monkeypatch, capsys):
+    monkeypatch.setattr(command_line, "create_cluster", lambda ctx: _FakeCluster())
+    monkeypatch.setattr(command_line, "do_status", lambda cluster, ctx: [])
+
+    code = show_status(get_context(["status", "--format", "json"]))
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out)["database"] == "default_db"
+
+
+class _FakeCluster:  # pylint: disable=too-few-public-methods
+    default_db_name = "default_db"

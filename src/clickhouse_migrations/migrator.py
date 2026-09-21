@@ -1,7 +1,7 @@
 import logging
 import re
 from collections import namedtuple
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from clickhouse_migrations.connection import Connection
 from clickhouse_migrations.defaults import MIGRATIONS_TABLE, MIGRATIONS_TABLE_ENGINE
@@ -32,7 +32,12 @@ STATUS_UNKNOWN = "unknown"
 
 # One row of a migration status report. state is one of the STATUS_* values;
 # applied_at is None for migrations that have not been applied yet.
-StatusRow = namedtuple("StatusRow", ["version", "state", "md5", "applied_at"])
+# has_down tells whether a local {VERSION}_{name}.down.sql file exists.
+StatusRow = namedtuple(
+    "StatusRow",
+    ["version", "state", "md5", "applied_at", "has_down"],
+    defaults=(False,),
+)
 
 # Tokenizer used to split a script into statements without treating a ";" that
 # lives inside a string literal, quoted identifier or comment as a delimiter.
@@ -165,8 +170,12 @@ ORDER BY tuple(created_at)"""
         ]
         return sorted(to_apply, key=lambda x: x.version)
 
-    def migration_status(self, incoming: List[Migration]) -> List[StatusRow]:
-        return self._build_status(incoming, self._query_applied_meta())
+    def migration_status(
+        self, incoming: List[Migration], down_versions: Optional[Set[int]] = None
+    ) -> List[StatusRow]:
+        return self._build_status(
+            incoming, self._query_applied_meta(), down_versions or set()
+        )
 
     def _query_applied_meta(self) -> Dict[int, Tuple[str, object]]:
         rows = self._conn.query(
@@ -178,13 +187,17 @@ ORDER BY tuple(created_at)"""
 
     @staticmethod
     def _build_status(
-        incoming: List[Migration], applied: Dict[int, Tuple[str, object]]
+        incoming: List[Migration],
+        applied: Dict[int, Tuple[str, object]],
+        down_versions: Optional[Set[int]] = None,
     ) -> List[StatusRow]:
+        down_versions = down_versions or set()
         incoming_by_version = {m.version: m for m in incoming}
 
         rows: List[StatusRow] = []
         for version in sorted(set(incoming_by_version) | set(applied)):
             local = incoming_by_version.get(version)
+            has_down = local is not None and version in down_versions
             applied_meta = applied.get(version)
 
             if local and applied_meta:
@@ -192,12 +205,18 @@ ORDER BY tuple(created_at)"""
                 state = (
                     STATUS_APPLIED if local.md5 == applied_md5 else STATUS_MD5_MISMATCH
                 )
-                rows.append(StatusRow(version, state, applied_md5, applied_at))
+                rows.append(
+                    StatusRow(version, state, applied_md5, applied_at, has_down)
+                )
             elif local:
-                rows.append(StatusRow(version, STATUS_PENDING, local.md5, None))
+                rows.append(
+                    StatusRow(version, STATUS_PENDING, local.md5, None, has_down)
+                )
             else:
                 applied_md5, applied_at = applied_meta
-                rows.append(StatusRow(version, STATUS_UNKNOWN, applied_md5, applied_at))
+                rows.append(
+                    StatusRow(version, STATUS_UNKNOWN, applied_md5, applied_at, False)
+                )
 
         return rows
 

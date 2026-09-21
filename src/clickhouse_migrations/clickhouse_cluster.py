@@ -241,14 +241,24 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
 
         storage = MigrationStorage(migration_path)
         incoming = storage.migrations(explicit_migrations)
+        down_versions = set(storage.down_scripts())
 
         # Read-only: never create the database or the schema table. If the
         # schema table is missing, nothing has been applied yet.
         if not self._is_initialized(db_name):
-            return [StatusRow(m.version, STATUS_PENDING, m.md5, None) for m in incoming]
+            return [
+                StatusRow(
+                    m.version,
+                    STATUS_PENDING,
+                    m.md5,
+                    None,
+                    m.version in down_versions,
+                )
+                for m in incoming
+            ]
 
         with self.connection(db_name) as conn:
-            return self._migrator(conn).migration_status(incoming)
+            return self._migrator(conn).migration_status(incoming, down_versions)
 
     def rollback(
         self,
