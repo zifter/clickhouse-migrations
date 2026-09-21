@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import List, Optional, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -12,6 +13,7 @@ from clickhouse_migrations.connection import (
     ClickhouseDriverConnection,
     Connection,
     import_clickhouse_connect,
+    normalize_db_url,
 )
 from clickhouse_migrations.defaults import (
     DB_HOST,
@@ -20,7 +22,6 @@ from clickhouse_migrations.defaults import (
     MIGRATIONS_TABLE,
     MIGRATIONS_TABLE_ENGINE,
 )
-from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import STATUS_PENDING, Migrator, StatusRow
 from clickhouse_migrations.util import (
@@ -55,18 +56,13 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         self._parsed_url = None
 
         if db_url:
-            if driver != CLICKHOUSE_DRIVER:
-                raise MigrationException(
-                    "db_url is only supported with the clickhouse-driver driver; "
-                    "use db_host/db_port with clickhouse-connect"
-                )
-            parsed = urlparse(db_url)
+            parsed = urlparse(normalize_db_url(db_url, driver, secure))
             path_db = parsed.path.lstrip("/")
             if path_db:
                 self.default_db_name = path_db
 
             query = dict(parse_qsl(parsed.query))
-            if secure:
+            if secure and driver == CLICKHOUSE_DRIVER:
                 query.setdefault("secure", "true")
 
             # Keep the base URL without a database in the path; connection()
@@ -74,6 +70,14 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             # after the query string.
             self._parsed_url = parsed._replace(path="", query=urlencode(query))
             self.db_url = urlunparse(self._parsed_url)
+            if driver == CLICKHOUSE_CONNECT:
+                # Never log the URL itself: it may carry the password.
+                logging.info(
+                    "clickhouse-connect will use %s://%s:%s (HTTP interface)",
+                    parsed.scheme,
+                    parsed.hostname,
+                    parsed.port or (8443 if parsed.scheme == "https" else 8123),
+                )
         else:
             self.db_host = db_host
             self.db_port = db_port
@@ -90,6 +94,16 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
 
         if self.driver == CLICKHOUSE_CONNECT:
             clickhouse_connect = import_clickhouse_connect()
+            if self._parsed_url is not None:
+                # The scheme is passed as ``interface`` because get_client
+                # ignores the DSN scheme; user, password, host, port and
+                # query settings come from the DSN itself.
+                client = clickhouse_connect.get_client(
+                    dsn=self.db_url,
+                    interface=self._parsed_url.scheme,
+                    database=db_name or None,
+                )
+                return ClickhouseConnectConnection(client)
             client = clickhouse_connect.get_client(
                 host=self.db_host,
                 port=int(self._resolved_port()),

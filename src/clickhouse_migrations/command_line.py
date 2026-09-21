@@ -55,7 +55,11 @@ def _add_common_arguments(parser):
     parser.add_argument(
         "--db-url",
         default=os.environ.get("DB_URL", None),
-        help="Clickhouse connection URL (clickhouse://user:password@host:port/db)",
+        help="Clickhouse connection URL (clickhouse://user:password@host:port/db). "
+        "Overrides --db-host/--db-port/--db-user/--db-password. "
+        "With clickhouse-driver use clickhouse:// or clickhouses:// (TLS); "
+        "with clickhouse-connect clickhouse:// maps to http:// (port 8123) and "
+        "clickhouses:// to https:// (port 8443), and http(s):// is accepted as is",
     )
     parser.add_argument(
         "--db-host",
