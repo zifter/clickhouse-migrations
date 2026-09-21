@@ -22,6 +22,7 @@ from clickhouse_migrations.defaults import (
     MIGRATIONS_TABLE,
     MIGRATIONS_TABLE_ENGINE,
 )
+from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import STATUS_PENDING, Migrator, StatusRow
 from clickhouse_migrations.util import (
