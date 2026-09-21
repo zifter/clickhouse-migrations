@@ -507,9 +507,9 @@ def test_cluster_lock_failure_does_not_release_someone_elses_lock():
     conn = FakeKeeperMap()
     conn.set_row("other", acquired_at=NOW - 5)
 
+    # Enter directly: acquiring fails, so there is no body to run.
     with pytest.raises(MigrationException, match="other"):
-        with _cluster(conn).migration_lock(lock=True, lock_timeout=0):
-            raise AssertionError("the body must not run")
+        _cluster(conn).migration_lock(lock=True, lock_timeout=0).__enter__()
 
     assert conn.row["owner"] == "other"
 
