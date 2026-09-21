@@ -1,6 +1,7 @@
 import logging
 from abc import ABC, abstractmethod
 from typing import Dict, List
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from clickhouse_migrations.exceptions import MigrationException
 
@@ -11,6 +12,58 @@ DRIVERS = (CLICKHOUSE_DRIVER, CLICKHOUSE_CONNECT)
 # Default native (clickhouse-driver) / HTTP (clickhouse-connect) ports, used
 # when the caller does not set a port explicitly.
 DEFAULT_PORT = {CLICKHOUSE_DRIVER: 9000, CLICKHOUSE_CONNECT: 8123}
+
+# URL schemes accepted by ``db_url`` for each driver. clickhouse-driver speaks
+# the native protocol (clickhouse://, clickhouses:// for TLS); clickhouse-connect
+# speaks HTTP(S) (http://, https://) and also accepts the native-style schemes,
+# which are mapped to their HTTP(S) equivalents.
+NATIVE_SCHEMES = ("clickhouse", "clickhouses")
+HTTP_SCHEMES = ("http", "https")
+ACCEPTED_SCHEMES = {
+    CLICKHOUSE_DRIVER: NATIVE_SCHEMES,
+    CLICKHOUSE_CONNECT: NATIVE_SCHEMES + HTTP_SCHEMES,
+}
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def normalize_db_url(url: str, driver: str, secure: bool = False) -> str:
+    """Validate the scheme of a connection URL and adapt it to the driver.
+
+    clickhouse-driver: ``clickhouse://`` and ``clickhouses://`` are used as is;
+    ``http(s)://`` is rejected.
+
+    clickhouse-connect: ``clickhouse://`` becomes ``http://`` and
+    ``clickhouses://`` becomes ``https://``; ``http(s)://`` passes through.
+    ``secure`` (the argument or a ``secure=true`` query parameter) upgrades an
+    ``http`` URL to ``https``; it never downgrades an ``https`` one. The URL
+    itself is never echoed in errors because it may contain a password.
+    """
+    scheme = urlparse(url).scheme.lower()
+    accepted = ACCEPTED_SCHEMES[driver]
+    if scheme not in accepted:
+        hint = ""
+        if scheme in HTTP_SCHEMES:
+            hint = " (http/https URLs need --driver clickhouse-connect)"
+        raise MigrationException(
+            f"Unsupported db_url scheme {scheme!r} for {driver}{hint}; "
+            f"accepted schemes: {', '.join(s + '://' for s in accepted)}"
+        )
+
+    if driver == CLICKHOUSE_DRIVER:
+        return url
+
+    parsed = urlparse(url)
+    query = []
+    for name, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if name == "secure":
+            secure = secure or value.lower() in _TRUTHY
+        else:
+            query.append((name, value))
+
+    is_tls = scheme in ("clickhouses", "https") or secure
+    return urlunparse(
+        parsed._replace(scheme="https" if is_tls else "http", query=urlencode(query))
+    )
 
 
 def import_clickhouse_connect():

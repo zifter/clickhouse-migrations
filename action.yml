@@ -10,7 +10,7 @@ inputs:
     required: false
     default: "./migrations"
   db-url:
-    description: "ClickHouse connection URL (clickhouse://user:password@host:port/db). Takes precedence over the individual db-* inputs."
+    description: "ClickHouse connection URL (clickhouse://user:password@host:port/db). Takes precedence over the individual db-* inputs. Works with both drivers; with clickhouse-connect, clickhouse:// maps to http:// (port 8123) and clickhouses:// to https:// (port 8443), and http(s):// is accepted as is."
     required: false
     default: ""
   db-host:
@@ -38,7 +38,7 @@ inputs:
     required: false
     default: ""
   driver:
-    description: "ClickHouse driver: 'clickhouse-driver' (native TCP) or 'clickhouse-connect' (official HTTP). Both are bundled; db-url is clickhouse-driver only."
+    description: "ClickHouse driver: 'clickhouse-driver' (native TCP) or 'clickhouse-connect' (official HTTP). Both are bundled and both work with db-url."
     required: false
     default: "clickhouse-driver"
   extra-args:

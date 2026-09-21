@@ -55,7 +55,19 @@ By default it uses the native [`clickhouse-driver`](https://github.com/mymarilyn
 pip install 'clickhouse-migrations[connect]'
 ```
 
-With `clickhouse-connect` the default port is `8123` (HTTP). Connecting via `--db-url` is only supported with the default `clickhouse-driver`; use `--db-host`/`--db-port` for `clickhouse-connect`.
+With `clickhouse-connect` the default port is `8123` (HTTP). `--db-url` works with both drivers (see [URL schemes](#url-schemes)).
+
+### URL schemes
+
+`--db-url` / `DB_URL` accepts a single URL such as `https://user:pass@host:8443/db`, which is how ClickHouse Cloud hands out credentials. The URL wins over `--db-host`/`--db-port`/`--db-user`/`--db-password`. The scheme is normalised per driver:
+
+Scheme | `clickhouse-driver` | `clickhouse-connect`
+--- | --- | ---
+`clickhouse://` | native TCP, default port 9000 | mapped to `http://`, default port **8123**
+`clickhouses://` | native TCP over TLS, default port 9440 | mapped to `https://`, default port **8443**
+`http://`, `https://` | rejected | used as is
+
+Note that with `clickhouse-connect` the `clickhouse://` mapping changes the port from 9000 to 8123: an explicit port in the URL is always kept, so `clickhouse://host:9000` would talk HTTP to port 9000. The resolved scheme, host and port (never the password) are logged at `INFO` level. `--secure` upgrades `http`/`clickhouse` URLs to TLS and never downgrades `https://`/`clickhouses://` ones.
 
 ## Migration files
 
@@ -297,7 +309,7 @@ Apply migrations from a GitHub workflow with the composite action:
     db-name: mydb
     # driver: clickhouse-connect   # optional; official HTTP driver (both are bundled). Defaults to native clickhouse-driver.
     # db-port: "9000"              # optional; defaults to 9000 (clickhouse-driver) / 8123 (clickhouse-connect)
-    # or connect via a single URL instead of the db-* inputs (clickhouse-driver only):
+    # or connect via a single URL instead of the db-* inputs (works with both drivers):
     # db-url: ${{ secrets.CLICKHOUSE_URL }}
     # any extra raw CLI flags:
     # extra-args: --secure --create-db-if-not-exists
@@ -316,7 +328,7 @@ docker run --rm \
     --db-url clickhouse://default:secret@clickhouse:9000/mydb
 ```
 
-The image bundles **both drivers**. It uses the native `clickhouse-driver` by default; to use the official HTTP `clickhouse-connect` driver, pass `--driver clickhouse-connect` (default port `8123`, and note `--db-url` is `clickhouse-driver` only):
+The image bundles **both drivers**. It uses the native `clickhouse-driver` by default; to use the official HTTP `clickhouse-connect` driver, pass `--driver clickhouse-connect` (default port `8123`; `--db-url` works with both drivers, see [URL schemes](#url-schemes)):
 
 ```bash
 docker run --rm \
