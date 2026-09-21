@@ -209,6 +209,28 @@ def test_build_status_classifies_every_state():
     assert by_version[4].state == STATUS_UNKNOWN
 
 
+def test_build_status_has_down():
+    incoming = [
+        Migration(version=1, md5="a", script="s1"),  # applied, has down
+        Migration(version=2, md5="b", script="s2"),  # pending, has down
+        Migration(version=3, md5="c", script="s3"),  # pending, no down
+    ]
+    applied = {
+        1: ("a", "2024-01-01 00:00:00"),
+        4: ("d", "2024-01-04 00:00:00"),  # unknown: never has_down
+    }
+
+    # pylint: disable=protected-access
+    rows = Migrator._build_status(incoming, applied, {1, 2, 4})
+    by_version = {r.version: r for r in rows}
+
+    assert by_version[1].has_down is True
+    assert by_version[2].has_down is True
+    assert by_version[3].has_down is False
+    assert by_version[4].has_down is False
+    assert not Migrator._build_status(incoming, applied)[0].has_down
+
+
 def test_build_status_empty():
     # pylint: disable=protected-access
     assert not Migrator._build_status([], {})

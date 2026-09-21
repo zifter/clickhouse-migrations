@@ -186,12 +186,41 @@ clickhouse-migrations status --db-name test --migrations-dir ./migrations
 ```
 
 ```
-VERSION  STATUS   MD5                               APPLIED AT
-1        applied  6172991b15b0852bc895e09b3e91ade4  2024-01-01 12:00:00
-2        pending  1a79a4d60de6718e8e5b326e338ae533
+VERSION  STATUS   MD5                               APPLIED AT           HAS DOWN
+1        applied  6172991b15b0852bc895e09b3e91ade4  2024-01-01 12:00:00  yes
+2        pending  1a79a4d60de6718e8e5b326e338ae533                       no
 ```
 
-States: `applied`, `pending`, `md5-mismatch` (a file changed after being applied), and `unknown` (applied but no longer present locally). It is read-only and never creates the database.
+States: `applied`, `pending`, `md5-mismatch` (a file changed after being applied), and `unknown` (applied but no longer present locally). `HAS DOWN` shows whether a paired `{VERSION}_{name}.down.sql` exists locally (always `no` for `unknown`). It is read-only and never creates the database.
+
+Options specific to `status`:
+
+Option | Env variable | Default
+-------|--------------|--------
+`--strict` | `STRICT` | `false`
+`--exit-code-pending` | `EXIT_CODE_PENDING` | `false`
+`--format {table,json}` | `STATUS_FORMAT` | `table`
+
+* `--strict` exits with code `1` if any migration is `md5-mismatch` or `unknown` (an applied migration was edited or deleted, so the next deploy would fail). `pending` is not a failure.
+* `--exit-code-pending` exits with code `1` if any migration is `pending`, e.g. as a post-deploy smoke-test gate. It composes with `--strict`: either condition gives exit code `1`.
+* Without these flags the exit code is `0`, as before.
+* `--format json` prints only a JSON document to stdout (logs go to stderr), with ISO-8601 timestamps and `null` for unapplied migrations:
+
+```json
+{
+  "database": "test",
+  "migrations": [
+    {"version": 1, "state": "applied", "md5": "6172991b15b0852bc895e09b3e91ade4", "applied_at": "2024-01-01T12:00:00", "has_down": true},
+    {"version": 2, "state": "pending", "md5": "1a79a4d60de6718e8e5b326e338ae533", "applied_at": null, "has_down": false}
+  ]
+}
+```
+
+CI example: fail the job on drift and list the offending versions:
+
+```bash
+clickhouse-migrations status --strict --format json | jq -r '.migrations[] | select(.state != "applied" and .state != "pending") | "\(.version) \(.state)"'
+```
 
 ### Rollbacks (down migrations)
 
