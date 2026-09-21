@@ -15,6 +15,8 @@ from clickhouse_migrations.defaults import (
     DB_HOST,
     DB_PASSWORD,
     DB_USER,
+    LOCK_TIMEOUT,
+    LOCK_TTL,
     MIGRATIONS_DIR,
     MIGRATIONS_TABLE,
     MIGRATIONS_TABLE_ENGINE,
@@ -62,7 +64,32 @@ STATUS_FORMAT_TABLE = "table"
 STATUS_FORMAT_JSON = "json"
 STATUS_FORMATS = (STATUS_FORMAT_TABLE, STATUS_FORMAT_JSON)
 
-SUBCOMMANDS = ("migrate", "status", "down", "new", "dump", "version")
+SUBCOMMANDS = ("migrate", "status", "down", "new", "dump", "unlock", "version")
+
+
+def _add_lock_arguments(parser):
+    parser.add_argument(
+        "--lock",
+        default=cast_to_bool(os.environ.get("LOCK", "0")),
+        action=argparse.BooleanOptionalAction,
+        help="Take a migration lock so concurrent runs cannot interleave "
+        "(opt-in; needs a server with the KeeperMap engine and "
+        "<keeper_map_path_prefix>, and fails if it is unavailable)",
+    )
+    parser.add_argument(
+        "--lock-timeout",
+        default=int(os.environ.get("LOCK_TIMEOUT", LOCK_TIMEOUT)),
+        type=int,
+        help="Seconds to wait for a lock held by another run, with --lock "
+        f"(default: {LOCK_TIMEOUT}; 0 fails immediately)",
+    )
+    parser.add_argument(
+        "--lock-ttl",
+        default=int(os.environ.get("LOCK_TTL", LOCK_TTL)),
+        type=int,
+        help="Seconds after which a lock is considered stale and may be taken "
+        f"over by another run, with --lock (default: {LOCK_TTL})",
+    )
 
 
 def _add_common_arguments(parser):
@@ -360,6 +387,7 @@ def get_context(args):
     _add_common_arguments(migrate_parser)
     _add_migrate_arguments(migrate_parser)
     _add_migrate_target_argument(migrate_parser)
+    _add_lock_arguments(migrate_parser)
 
     status_parser = subparsers.add_parser(
         "status", help="Show applied vs pending migrations without applying anything"
@@ -373,6 +401,13 @@ def get_context(args):
     )
     _add_common_arguments(down_parser)
     _add_down_arguments(down_parser)
+    _add_lock_arguments(down_parser)
+
+    unlock_parser = subparsers.add_parser(
+        "unlock",
+        help="Force-release the migration lock left behind by a dead run",
+    )
+    _add_common_arguments(unlock_parser)
 
     new_parser = subparsers.add_parser(
         "new", help="Create the next migration file locally, without any database"
@@ -428,6 +463,9 @@ def do_migrate(cluster, ctx) -> List[Migration]:
         fake=ctx.fake,
         migration_log_format=ctx.migration_log_format,
         to_version=ctx.to_version,
+        lock=ctx.lock,
+        lock_timeout=ctx.lock_timeout,
+        lock_ttl=ctx.lock_ttl,
     )
 
 
@@ -453,6 +491,9 @@ def do_rollback(cluster, ctx) -> List[int]:
         to_version=ctx.to_version,
         dryrun=ctx.dry_run,
         multi_statement=ctx.multi_statement,
+        lock=ctx.lock,
+        lock_timeout=ctx.lock_timeout,
+        lock_ttl=ctx.lock_ttl,
     )
 
 
@@ -546,6 +587,21 @@ def rollback(ctx) -> List[int]:
     return do_rollback(cluster, ctx)
 
 
+def unlock(ctx) -> int:
+    logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
+
+    cluster = create_cluster(ctx)
+    holder = cluster.force_unlock(db_name=ctx.db_name)
+    if holder is None:
+        print("No migration lock is held.")
+    else:
+        print(
+            f"Released the migration lock held by {holder.owner} " f"for {holder.age}s."
+        )
+
+    return 0
+
+
 def create_migration(ctx) -> List[Path]:
     created = MigrationStorage(ctx.migrations_dir).create(
         ctx.name,
@@ -622,6 +678,8 @@ def main() -> int:
             return run_dump(ctx)
         elif ctx.command == "down":
             rollback(ctx)
+        elif ctx.command == "unlock":
+            return unlock(ctx)
         else:
             migrate(ctx)
     except MigrationException as exc:

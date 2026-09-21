@@ -35,6 +35,7 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 * **Scaffolding** — [`new`](#creating-a-migration) creates the next migration file for you, offline
 * **Configurable bookkeeping** — [rename the migrations table](#the-migrations-table) or set its engine (`--migrations-table` / `--migrations-table-engine`)
 * **Schema dump** — [`dump`](#dumping-the-schema) prints the live schema as normalised, dependency-ordered SQL, with `--check` for drift detection in CI
+* **Safe concurrent runs** — an opt-in [migration lock](#concurrent-runs-and-locking) (`--lock`) so several replicas of a Kubernetes `Job` cannot interleave
 * **Naive rollbacks** — optional paired [`{VERSION}_{name}.down.sql`](#rollbacks-down-migrations) files and a `down` subcommand to reverse applied migrations
 
 ## Known alternatives
@@ -128,6 +129,9 @@ CLI flag | Environment variable | Default
 `--dry-run` | `DRY_RUN` | `false`
 `--fake` | `FAKE` | `false`
 `--to` | — | —
+`--lock` / `--no-lock` | `LOCK` | `false`
+`--lock-timeout` | `LOCK_TIMEOUT` | `300`
+`--lock-ttl` | `LOCK_TTL` | `3600`
 `--secure` | `SECURE` | `false`
 `--log-level` | `LOG_LEVEL` | `WARNING`
 `--migration-log-format` | `MIGRATION_LOG_FORMAT` | `full`
@@ -362,6 +366,9 @@ Parameter | Description | Default
 `dryrun` | Print migrations without executing them | `False`
 `fake` | Mark migrations as applied without executing SQL | `False`
 `to_version` | Apply pending migrations only up to and including this version; mutually exclusive with `explicit_migrations` | `None`
+`lock` | Take the [migration lock](#concurrent-runs-and-locking) for the run (opt-in; fails if the server cannot provide it) | `False`
+`lock_timeout` | Seconds to wait for a lock held by another run (`0` fails immediately) | `300`
+`lock_ttl` | Seconds after which a lock is considered stale and may be taken over | `3600`
 `secure` | Use secure (TLS) connection | `False`
 `migration_log_format` | Migration log format `full` logs the full Migration object, `compact` logs only version and md5 | `full`
 
@@ -390,6 +397,58 @@ CLI flag | Environment variable | Default
 `--migrations-table-engine` is a **full engine clause** passed to the `CREATE TABLE` verbatim, with no validation, and it wins over the engine derived from `--cluster-name`. `{database}`, `{table}`, `{shard}` and `{replica}` in it are ClickHouse macros, expanded by the server.
 
 > **`Replicated` database engine caveat:** a database created with `ENGINE = Replicated(...)` injects its own ZooKeeper path and replica arguments into every `ReplicatedMergeTree` table, and conflicts with an explicit path. There, set `--migrations-table-engine "ReplicatedMergeTree"` (no arguments) and leave `--cluster-name` unset — the database engine replicates the DDL itself.
+
+### Concurrent runs and locking
+
+ClickHouse has no transactional DDL, so two migration runs started at the same time (say a Kubernetes `Job` with several replicas, or CI and a deploy hook racing each other) both read `schema_versions`, both compute the same pending list and both execute it — interleaving statements and writing duplicate bookkeeping rows.
+
+**Without `--lock`, concurrent runs are unsafe — run migrations from one place at a time.** Pass `--lock` (or `LOCK=true`) and `migrate` / `down` take a **lock per migrated database** for the duration of the run:
+
+```bash
+clickhouse-migrations --lock --db-name mydb --migrations-dir ./migrations
+```
+
+```sql
+CREATE TABLE IF NOT EXISTS schema_versions_lock (name String, owner String, acquired_at DateTime)
+ENGINE = KeeperMap('/clickhouse-migrations/<database>') PRIMARY KEY name
+```
+
+* The lock is a single row inserted with `keeper_map_strict_mode = 1`. `KeeperMap` is backed by Keeper/ZooKeeper and that setting turns the insert into a compare-and-set, so the second run **fails** instead of overwriting the row.
+* `owner` is `<hostname>:<pid>:<uuid>`, so the error message names the run that is holding the lock:
+  `Could not take the migration lock on "mydb"."schema_versions_lock" within 300s: it is held by migrator-abc:1:…, which has held it for 42s.`
+* The lock is released in a `finally`, deleting **only** rows whose `owner` matches — a run never drops somebody else's lock, even after a failure or a `Ctrl-C`.
+* A lock older than `--lock-ttl` is stale and is taken over with a warning. The takeover is a compare-and-delete on `(owner, acquired_at)` followed by the normal strict insert, so of two runs seeing the same stale lock only one can win.
+* The lock table (`<migrations table>_lock`, next to the bookkeeping table) is created on demand, only when `--lock` is used. A run without `--lock` does no lock-related work at all and is not blocked by a lock somebody else holds.
+* `status` is read-only and never locks, `--dry-run` never locks, and `new` never touches the database at all.
+
+CLI flag | Environment variable | Default | Meaning
+---------|---------------------|---------|--------
+`--lock` / `--no-lock` | `LOCK` | `false` | Take the migration lock for this run; the run **fails** if the server cannot provide it (see below)
+`--lock-timeout` | `LOCK_TIMEOUT` | `300` | Seconds to wait for a lock held by another run; `0` fails immediately
+`--lock-ttl` | `LOCK_TTL` | `3600` | Seconds after which a lock counts as stale and may be taken over
+
+#### If a run dies while holding the lock
+
+A pod that is OOM-killed mid-migration leaves the row behind. Either wait for `--lock-ttl` to expire, or force-release it:
+
+```bash
+clickhouse-migrations unlock --db-name mydb
+# Released the migration lock held by migrator-abc:1:… for 42s.
+```
+
+`unlock` never rolls anything back — check what the dead run managed to apply with `clickhouse-migrations status` first.
+
+#### Server requirements
+
+`KeeperMap` needs ClickHouse 22.9+, a Keeper/ZooKeeper ensemble **and** `<keeper_map_path_prefix>` in the server configuration:
+
+```xml
+<clickhouse>
+    <keeper_map_path_prefix>/keeper_map_tables</keeper_map_path_prefix>
+</clickhouse>
+```
+
+Without it the engine is disabled, and a run started with `--lock` fails with an explicit message instead of silently migrating unprotected. Drop `--lock` to run as before, knowing that concurrent runs are then unsafe.
 
 ### In CI (GitHub Action)
 
@@ -442,6 +501,8 @@ metadata:
   name: clickhouse-migrations
 spec:
   backoffLimit: 3
+  # Retries and several replicas are safe only with the migration lock enabled
+  # below, see "Concurrent runs and locking".
   template:
     spec:
       restartPolicy: Never
@@ -455,6 +516,13 @@ spec:
                 secretKeyRef:
                   name: clickhouse
                   key: url
+            # Serialise concurrent replicas/retries on the migration lock
+            # (needs Keeper + <keeper_map_path_prefix> on the server).
+            - name: LOCK
+              value: "true"
+            # Wait up to 10 minutes for a migration started by another replica.
+            - name: LOCK_TIMEOUT
+              value: "600"
           volumeMounts:
             - name: migrations
               mountPath: /migrations
@@ -463,6 +531,8 @@ spec:
           configMap:
             name: clickhouse-migrations
 ```
+
+With `LOCK: "true"` a retried or parallel `Job` replica waits for the running one and then finds nothing left to apply. Without the lock (the default, or a server without Keeper) keep the `Job` to a single replica at a time — concurrent runs can interleave.
 
 Migrations are provided here via a ConfigMap; alternatively bake them into your own image with `FROM ghcr.io/zifter/clickhouse-migrations`.
 

@@ -16,6 +16,7 @@ from clickhouse_migrations.command_line import (
     show_status,
     status_exit_code,
 )
+from clickhouse_migrations.lock import LockHolder
 from clickhouse_migrations.migrator import StatusRow
 
 TESTS_DIR = Path(__file__).parent
@@ -539,3 +540,103 @@ def test_show_status_json_falls_back_to_default_db_name(monkeypatch, capsys):
 
 class _FakeCluster:  # pylint: disable=too-few-public-methods
     default_db_name = "default_db"
+
+
+def test_lock_is_off_by_default(monkeypatch):
+    for name in ("LOCK", "LOCK_TIMEOUT", "LOCK_TTL"):
+        monkeypatch.delenv(name, raising=False)
+
+    context = get_context([])
+
+    # Opt-in: existing invocations keep running without any locking.
+    assert context.lock is False
+    assert context.lock_timeout == 300
+    assert context.lock_ttl == 3600
+
+
+def test_lock_flags_explicit_values():
+    assert get_context(["--lock"]).lock is True
+    assert get_context(["--no-lock"]).lock is False
+    assert get_context(["--lock-timeout", "7"]).lock_timeout == 7
+    assert get_context(["down", "--lock-ttl", "60"]).lock_ttl == 60
+
+
+def test_lock_flags_from_env(monkeypatch):
+    monkeypatch.setenv("LOCK", "true")
+    monkeypatch.setenv("LOCK_TIMEOUT", "11")
+    monkeypatch.setenv("LOCK_TTL", "22")
+
+    context = get_context(["down"])
+
+    assert context.lock is True
+    assert context.lock_timeout == 11
+    assert context.lock_ttl == 22
+
+    monkeypatch.setenv("LOCK", "0")
+    assert get_context([]).lock is False
+    # An explicit flag still wins over the environment.
+    assert get_context(["--lock"]).lock is True
+
+
+def test_lock_flags_rejected_for_status_and_new():
+    for command in ("status", "new"):
+        with pytest.raises(SystemExit):
+            get_context([command, "--lock"])
+
+
+def test_do_migrate_passes_lock_options():
+    calls = []
+    cluster = types.SimpleNamespace(migrate=lambda **kw: calls.append(kw) or [])
+
+    command_line.do_migrate(
+        cluster, get_context(["--lock", "--lock-timeout", "5", "--lock-ttl", "6"])
+    )
+
+    assert calls[0]["lock"] is True
+    assert calls[0]["lock_timeout"] == 5
+    assert calls[0]["lock_ttl"] == 6
+
+
+def test_do_rollback_passes_lock_options():
+    calls = []
+    cluster = types.SimpleNamespace(rollback=lambda **kw: calls.append(kw) or [])
+
+    command_line.do_rollback(cluster, get_context(["down", "--lock"]))
+
+    assert calls[0]["lock"] is True
+    assert calls[0]["lock_timeout"] == 300
+
+
+def test_unlock_subcommand_parses_common_arguments():
+    context = get_context(["unlock", "--db-name", "mydb", "--migrations-table", "mt"])
+
+    assert context.command == "unlock"
+    assert context.db_name == "mydb"
+    assert context.migrations_table == "mt"
+
+
+def test_unlock_reports_nothing_held(monkeypatch, capsys):
+    monkeypatch.setattr(
+        command_line,
+        "create_cluster",
+        lambda ctx: types.SimpleNamespace(force_unlock=lambda db_name: None),
+    )
+
+    assert command_line.unlock(get_context(["unlock"])) == 0
+    assert "No migration lock is held." in capsys.readouterr().out
+
+
+def test_main_unlock_reports_the_released_holder(monkeypatch, capsys):
+    holder = LockHolder("pod-a:7:uuid", 1_700_000_000, 42)
+    monkeypatch.setattr(
+        command_line,
+        "create_cluster",
+        lambda ctx: types.SimpleNamespace(force_unlock=lambda db_name: holder),
+    )
+    monkeypatch.setattr(sys, "argv", ["clickhouse-migrations", "unlock"])
+
+    assert main() == 0
+
+    out = capsys.readouterr().out
+    assert "pod-a:7:uuid" in out
+    assert "42s" in out

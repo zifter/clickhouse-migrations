@@ -43,6 +43,15 @@ make docker-compose-down
 Integration tests live under `src/tests/integration/` and are auto-marked with
 the `integration` marker.
 
+The dev cluster (`dev/docker-compose.yaml`) is configured from
+`dev/CH-TEMPLATE`. It sets `<keeper_map_path_prefix>`
+(`dev/CH-TEMPLATE/config.d/keeper_map_path_prefix.xml`), which the server needs
+before a `KeeperMap` table - and therefore the opt-in [migration
+lock](../README.md#concurrent-runs-and-locking) - can be created; the lock
+integration tests need it. NB: files in
+`config.d/` must use the same root tag as `config.xml` (`<company>`), otherwise
+ClickHouse silently skips them.
+
 ## Linting and formatting
 
 ```bash
