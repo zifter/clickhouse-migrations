@@ -1,0 +1,8 @@
+<!-- NB: the root tag must match the root tag of config.xml ("company"),
+     otherwise ClickHouse bypasses the merge of this config.d file. -->
+<company>
+    <!-- Root ZooKeeper path for KeeperMap tables. Without it the KeeperMap
+         engine is disabled and clickhouse-migrations cannot take its
+         migration lock (see "Concurrent runs and locking" in the README). -->
+    <keeper_map_path_prefix>/keeper_map_tables</keeper_map_path_prefix>
+</company>

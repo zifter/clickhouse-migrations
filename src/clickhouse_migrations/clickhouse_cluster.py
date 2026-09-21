@@ -1,4 +1,5 @@
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional, Set, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -19,10 +20,14 @@ from clickhouse_migrations.defaults import (
     DB_HOST,
     DB_PASSWORD,
     DB_USER,
+    LOCK,
+    LOCK_TIMEOUT,
+    LOCK_TTL,
     MIGRATIONS_TABLE,
     MIGRATIONS_TABLE_ENGINE,
 )
 from clickhouse_migrations.exceptions import MigrationException
+from clickhouse_migrations.lock import KeeperMapLock, LockHolder
 from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import STATUS_PENDING, Migrator, StatusRow
 from clickhouse_migrations.schema_dump import (
@@ -321,6 +326,9 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         fake: bool = False,
         migration_log_format: str = "full",
         to_version: Optional[int] = None,
+        lock: bool = LOCK,
+        lock_timeout: int = LOCK_TIMEOUT,
+        lock_ttl: int = LOCK_TTL,
     ):
         db_name = db_name if db_name is not None else self.default_db_name
 
@@ -329,8 +337,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
                 "to_version and explicit_migrations are mutually exclusive."
             )
 
-        storage = MigrationStorage(migration_path)
-        migrations = storage.migrations(explicit_migrations)
+        migrations = MigrationStorage(migration_path).migrations(explicit_migrations)
 
         return self.apply_migrations(
             db_name,
@@ -342,6 +349,9 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             fake=fake,
             migration_log_format=migration_log_format,
             to_version=to_version,
+            lock=lock,
+            lock_timeout=lock_timeout,
+            lock_ttl=lock_ttl,
         )
 
     def status(
@@ -381,6 +391,9 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         to_version: Optional[int] = None,
         dryrun: bool = False,
         multi_statement: bool = True,
+        lock: bool = LOCK,
+        lock_timeout: int = LOCK_TIMEOUT,
+        lock_ttl: int = LOCK_TTL,
     ) -> List[int]:
         db_name = db_name if db_name is not None else self.default_db_name
 
@@ -391,14 +404,22 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         if not self._is_initialized(db_name):
             return []
 
-        with self.connection(db_name) as conn:
-            migrator = self._migrator(conn, dryrun)
-            return migrator.rollback_migration(
-                down_scripts,
-                steps=steps,
-                to_version=to_version,
-                multi_statement=multi_statement,
-            )
+        # A dry run changes nothing, so it never blocks a real run.
+        with self.migration_lock(
+            db_name,
+            lock=lock,
+            lock_timeout=lock_timeout,
+            lock_ttl=lock_ttl,
+            enabled=not dryrun,
+        ):
+            with self.connection(db_name) as conn:
+                migrator = self._migrator(conn, dryrun)
+                return migrator.rollback_migration(
+                    down_scripts,
+                    steps=steps,
+                    to_version=to_version,
+                    multi_statement=multi_statement,
+                )
 
     def apply_migrations(
         self,
@@ -411,6 +432,9 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         fake: bool = False,
         migration_log_format: str = "full",
         to_version: Optional[int] = None,
+        lock: bool = LOCK,
+        lock_timeout: int = LOCK_TIMEOUT,
+        lock_ttl: int = LOCK_TTL,
     ) -> List[Migration]:
         if create_db_if_no_exists:
             if cluster_name is None:
@@ -418,11 +442,73 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             else:
                 self.create_db(db_name, cluster_name)
 
+        # A dry run executes nothing, so it never blocks a real run.
+        with self.migration_lock(
+            db_name,
+            lock=lock,
+            lock_timeout=lock_timeout,
+            lock_ttl=lock_ttl,
+            enabled=not dryrun,
+        ):
+            with self.connection(db_name) as conn:
+                migrator = self._migrator(
+                    conn, dryrun, migration_log_format=migration_log_format
+                )
+                migrator.init_schema(cluster_name)
+                return migrator.apply_migration(
+                    migrations, multi_statement, fake=fake, to_version=to_version
+                )
+
+    def _lock(
+        self,
+        conn: Connection,
+        db_name: Optional[str],
+        lock_timeout: int = LOCK_TIMEOUT,
+        lock_ttl: int = LOCK_TTL,
+    ) -> KeeperMapLock:
+        return KeeperMapLock(
+            conn,
+            db_name,
+            migrations_table=self.migrations_table,
+            timeout=lock_timeout,
+            ttl=lock_ttl,
+        )
+
+    @contextmanager
+    def migration_lock(
+        self,
+        db_name: Optional[str] = None,
+        lock: bool = LOCK,
+        lock_timeout: int = LOCK_TIMEOUT,
+        lock_ttl: int = LOCK_TTL,
+        enabled: bool = True,
+    ):
+        """Hold the migration lock of ``db_name`` for the duration of the block.
+
+        Locking is opt-in: without ``lock`` nothing lock-related touches the
+        database at all, and the run behaves exactly as it did before the lock
+        existed. With it, the lock uses its own connection so releasing it does
+        not depend on the state of the connection that ran the migrations.
+        """
+        db_name = db_name if db_name is not None else self.default_db_name
+
+        if not enabled or not lock:
+            yield None
+            return
+
+        with self.connection(db_name) as lock_conn:
+            migration_lock = self._lock(lock_conn, db_name, lock_timeout, lock_ttl)
+            migration_lock.acquire()
+            try:
+                yield migration_lock
+            finally:
+                # Also covers a failing migration and KeyboardInterrupt: a lock
+                # we never took is never released, and only our own row goes.
+                migration_lock.release()
+
+    def force_unlock(self, db_name: Optional[str] = None) -> Optional[LockHolder]:
+        """Force-release the migration lock of a database ("unlock")."""
+        db_name = db_name if db_name is not None else self.default_db_name
+
         with self.connection(db_name) as conn:
-            migrator = self._migrator(
-                conn, dryrun, migration_log_format=migration_log_format
-            )
-            migrator.init_schema(cluster_name)
-            return migrator.apply_migration(
-                migrations, multi_statement, fake=fake, to_version=to_version
-            )
+            return self._lock(conn, db_name).force_release()
