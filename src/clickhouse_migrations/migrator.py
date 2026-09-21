@@ -212,10 +212,25 @@ ORDER BY tuple(created_at)"""
         migrations: List[Migration],
         multi_statement: bool,
         fake: bool = False,
+        to_version: Optional[int] = None,
     ) -> List[Migration]:
+        if to_version is not None and to_version not in {m.version for m in migrations}:
+            raise MigrationException(
+                f"Target version {to_version} is not among the local migrations."
+            )
+
+        # The md5 / missing / gap checks in migrations_to_apply always see the
+        # full local set; the target only trims what is executed afterwards.
         migrations_to_process = (
             migrations if fake else self.migrations_to_apply(migrations)
         )
+
+        if to_version is not None:
+            if not fake:
+                self._check_target_not_below_applied(to_version)
+            migrations_to_process = [
+                m for m in migrations_to_process if m.version <= to_version
+            ]
 
         logging.info("Total migrations to apply: %d", len(migrations_to_process))
 
@@ -257,6 +272,15 @@ ORDER BY tuple(created_at)"""
             logging.info("Migration is fully applied.")
 
         return migrations_to_process
+
+    def _check_target_not_below_applied(self, to_version: int) -> None:
+        applied = [m.version for m in self.query_applied_migrations()]
+        if applied and max(applied) > to_version:
+            raise MigrationException(
+                f"Target version {to_version} is below the highest applied "
+                f"version {max(applied)}. migrate never rolls back, "
+                "use the down subcommand instead."
+            )
 
     def _rollback_targets(self, steps: int, to_version: Optional[int]) -> List[int]:
         applied_versions = [m.version for m in self.query_applied_migrations()]

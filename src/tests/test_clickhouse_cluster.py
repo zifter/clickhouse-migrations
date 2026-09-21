@@ -162,3 +162,11 @@ def test_cluster_passes_table_options_to_the_migrator():
     assert migrator.migrations_table_database == "meta"
     assert migrator.migrations_table_name == "my_versions"
     assert migrator._migrations_table_engine == "Memory"
+
+
+def test_migrate_to_version_with_explicit_migrations_is_rejected(tmp_path):
+    (tmp_path / "001_a.sql").write_text("SELECT 1;", encoding="utf8")
+    cluster = ClickhouseCluster(db_host="localhost")
+
+    with pytest.raises(MigrationException, match="mutually exclusive"):
+        cluster.migrate("pytest", tmp_path, explicit_migrations=["1"], to_version=1)

@@ -1,4 +1,5 @@
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -361,3 +362,33 @@ def test_create_cluster_passes_migrations_table_options():
 
     assert cluster.migrations_table == "meta.my_versions"
     assert cluster.migrations_table_engine == "Memory"
+
+
+def test_migrate_to_version_default_and_parsed():
+    assert get_context(["migrate"]).to_version is None
+    assert get_context(["migrate", "--to", "3"]).to_version == 3
+    # bare backwards-compatible invocation is shimmed to migrate
+    bare = get_context(["--to", "2"])
+    assert bare.command == "migrate"
+    assert bare.to_version == 2
+
+
+def test_migrate_to_conflicts_with_migrations(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        get_context(["migrate", "--to", "2", "--migrations", "1"])
+
+    assert exc_info.value.code == 2
+    assert "--to cannot be combined with --migrations" in capsys.readouterr().err
+
+
+def test_migrations_alone_still_allowed():
+    assert get_context(["--migrations", "1"]).to_version is None
+
+
+def test_do_migrate_passes_to_version():
+    calls = []
+    cluster = types.SimpleNamespace(migrate=lambda **kw: calls.append(kw) or [])
+
+    command_line.do_migrate(cluster, get_context(["--to", "4"]))
+
+    assert calls[0]["to_version"] == 4

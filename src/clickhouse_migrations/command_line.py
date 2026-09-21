@@ -171,6 +171,19 @@ def _add_migrate_arguments(parser):
     )
 
 
+def _add_migrate_target_argument(parser):
+    # No environment variable, same as "down --to".
+    parser.add_argument(
+        "--to",
+        dest="to_version",
+        default=None,
+        type=int,
+        help="Apply pending migrations only up to and including this version. "
+        "Fails if it is below the highest applied version (use down) "
+        "and cannot be combined with --migrations.",
+    )
+
+
 def _add_down_arguments(parser):
     parser.add_argument(
         "--steps",
@@ -243,6 +256,7 @@ def get_context(args):
     )
     _add_common_arguments(migrate_parser)
     _add_migrate_arguments(migrate_parser)
+    _add_migrate_target_argument(migrate_parser)
 
     status_parser = subparsers.add_parser(
         "status", help="Show applied vs pending migrations without applying anything"
@@ -271,7 +285,11 @@ def get_context(args):
     ):
         args = ["migrate", *args]
 
-    return parser.parse_args(args)
+    ctx = parser.parse_args(args)
+    if ctx.command == "migrate" and ctx.to_version is not None and ctx.migrations:
+        migrate_parser.error("--to cannot be combined with --migrations")
+
+    return ctx
 
 
 def create_cluster(ctx) -> ClickhouseCluster:
@@ -299,6 +317,7 @@ def do_migrate(cluster, ctx) -> List[Migration]:
         dryrun=ctx.dry_run,
         fake=ctx.fake,
         migration_log_format=ctx.migration_log_format,
+        to_version=ctx.to_version,
     )
 
 

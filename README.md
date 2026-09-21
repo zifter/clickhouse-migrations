@@ -114,10 +114,28 @@ CLI flag | Environment variable | Default
 `--create-db-if-not-exists` | `CREATE_DB_IF_NOT_EXISTS` | `true`
 `--dry-run` | `DRY_RUN` | `false`
 `--fake` | `FAKE` | `false`
+`--to` | — | —
 `--secure` | `SECURE` | `false`
 `--log-level` | `LOG_LEVEL` | `WARNING`
 `--migration-log-format` | `MIGRATION_LOG_FORMAT` | `full`
 `--driver` | `DRIVER` | `clickhouse-driver`
+
+### Migrating up to a version
+
+By default `migrate` applies every pending migration. Pass `--to VERSION` to stop at a target version, e.g. for a staged rollout or to reproduce a bug at a specific production version:
+
+```bash
+clickhouse-migrations migrate --to 2 ...   # apply pending migrations with version <= 2, then stop
+clickhouse-migrations migrate --to 3 ...   # later: continue up to 3
+clickhouse-migrations migrate ...          # finally: everything that is left
+```
+
+Python: `cluster.migrate(db_name="test", migration_path="./migrations", to_version=2)`.
+
+* The version must exist among the local migrations, otherwise the run fails.
+* If `VERSION` equals the highest applied version there is nothing to do and the run succeeds. If it is *below* it, the run fails and points you at `down` - `migrate` never rolls anything back.
+* The md5, missing-migration and unknown-migration checks still cover the whole local set, so a problem above the target is still reported.
+* Works with `--dry-run` and `--fake`; cannot be combined with `--migrations`. `--to` has no environment variable, and is unrelated to `down --to`.
 
 ### Creating a migration
 
@@ -235,6 +253,7 @@ Parameter | Description | Default
 `multi_statement` | Allow multiple statements per migration file | `True`
 `dryrun` | Print migrations without executing them | `False`
 `fake` | Mark migrations as applied without executing SQL | `False`
+`to_version` | Apply pending migrations only up to and including this version; mutually exclusive with `explicit_migrations` | `None`
 `secure` | Use secure (TLS) connection | `False`
 `migration_log_format` | Migration log format `full` logs the full Migration object, `compact` logs only version and md5 | `full`
 
