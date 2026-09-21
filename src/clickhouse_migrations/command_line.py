@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import types
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import List, Optional
@@ -28,6 +29,7 @@ from clickhouse_migrations.migrator import (
     Migrator,
     StatusRow,
 )
+from clickhouse_migrations.schema_dump import diff_dumps, write_text_atomic
 
 
 def log_level(value: str) -> str:
@@ -60,7 +62,7 @@ STATUS_FORMAT_TABLE = "table"
 STATUS_FORMAT_JSON = "json"
 STATUS_FORMATS = (STATUS_FORMAT_TABLE, STATUS_FORMAT_JSON)
 
-SUBCOMMANDS = ("migrate", "status", "down", "new", "version")
+SUBCOMMANDS = ("migrate", "status", "down", "new", "dump", "version")
 
 
 def _add_common_arguments(parser):
@@ -279,6 +281,70 @@ def _add_new_arguments(parser):
     )
 
 
+# Connection options "dump" shares with the other subcommands. It is read-only,
+# so it takes none of the migrate/down options (dry-run, migrations-dir, ...).
+DUMP_COMMON_OPTIONS = (
+    "--db-url",
+    "--db-host",
+    "--db-port",
+    "--driver",
+    "--db-user",
+    "--db-password",
+    "--db-name",
+    "--migrations-table",
+    "--log-level",
+    "--secure",
+)
+
+
+def _only_options(parser, allowed):
+    """A stand-in for ``parser`` that registers only the ``allowed`` options."""
+
+    def add_argument(*names, **kwargs):
+        if names[0] in allowed:
+            parser.add_argument(*names, **kwargs)
+
+    return types.SimpleNamespace(add_argument=add_argument)
+
+
+def _add_dump_arguments(parser):
+    _add_common_arguments(_only_options(parser, DUMP_COMMON_OPTIONS))
+    default_tables = os.environ.get("DUMP_TABLES", "")
+    parser.add_argument(
+        "--tables",
+        default=default_tables.split(",") if default_tables else [],
+        type=str,
+        nargs="+",
+        help="Dump only these tables/views/dictionaries (by name)",
+    )
+    parser.add_argument(
+        "--keep-replicated-paths",
+        default=cast_to_bool(os.environ.get("KEEP_REPLICATED_PATHS", "0")),
+        action=argparse.BooleanOptionalAction,
+        help="Keep the ZooKeeper path and replica name arguments of Replicated*MergeTree "
+        "engines (by default they are removed so the dump is portable across clusters)",
+    )
+    parser.add_argument(
+        "--include-migrations-table",
+        default=cast_to_bool(os.environ.get("INCLUDE_MIGRATIONS_TABLE", "0")),
+        action=argparse.BooleanOptionalAction,
+        help="Also dump the migrations bookkeeping (and lock) table",
+    )
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument(
+        "--out",
+        default=None,
+        type=Path,
+        help="Write the dump to this file instead of stdout",
+    )
+    target.add_argument(
+        "--check",
+        default=None,
+        type=Path,
+        help="Compare the dump with this file; exit code 1 and a diff on stderr on drift",
+    )
+
+
 def get_context(args):
     parser = ArgumentParser(prog="clickhouse-migrations")
     parser.add_argument(
@@ -313,6 +379,12 @@ def get_context(args):
     )
     _add_new_arguments(new_parser)
 
+    dump_parser = subparsers.add_parser(
+        "dump",
+        help="Print the schema (tables, views, dictionaries) as portable, diffable SQL",
+    )
+    _add_dump_arguments(dump_parser)
+
     subparsers.add_parser("version", help="Show the version and exit")
 
     # Default to the "migrate" subcommand so existing invocations
@@ -340,7 +412,7 @@ def create_cluster(ctx) -> ClickhouseCluster:
         secure=ctx.secure,
         driver=ctx.driver,
         migrations_table=ctx.migrations_table,
-        migrations_table_engine=ctx.migrations_table_engine,
+        migrations_table_engine=getattr(ctx, "migrations_table_engine", None),
     )
 
 
@@ -486,6 +558,56 @@ def create_migration(ctx) -> List[Path]:
     return created
 
 
+def run_dump(ctx) -> int:
+    """Print, write (--out) or verify (--check) the schema dump.
+
+    Exit code: 0 on success (and, with --check, when there is no drift); 1 on
+    drift or on any error. stdout only ever carries the SQL.
+    """
+    logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
+
+    try:
+        expected = None
+        if ctx.check is not None:
+            try:
+                expected = ctx.check.read_text(encoding="utf8")
+            except OSError as exc:
+                raise MigrationException(
+                    f"Cannot read the schema file {ctx.check}: {exc}"
+                ) from exc
+
+        cluster = create_cluster(ctx)
+        db_name = ctx.db_name if ctx.db_name is not None else cluster.default_db_name
+        text = cluster.dump(
+            db_name=db_name,
+            tables=ctx.tables,
+            keep_replicated_paths=ctx.keep_replicated_paths,
+            include_migrations_table=ctx.include_migrations_table,
+        )
+
+        if expected is not None:
+            diff = diff_dumps(expected, text, str(ctx.check), f"database {db_name}")
+            if diff:
+                print(diff, file=sys.stderr)
+                print(
+                    f"Schema drift: {db_name} differs from {ctx.check}", file=sys.stderr
+                )
+                return 1
+            print(f"Schema of {db_name} matches {ctx.check}", file=sys.stderr)
+        elif ctx.out is not None:
+            try:
+                write_text_atomic(ctx.out, text)
+            except OSError as exc:
+                raise MigrationException(f"Cannot write {ctx.out}: {exc}") from exc
+            print(f"Wrote the schema of {db_name} to {ctx.out}", file=sys.stderr)
+        else:
+            sys.stdout.write(text)
+    except MigrationException as exc:
+        logging.error("Dump failed: %s", exc)
+        return 1
+    return 0
+
+
 def main() -> int:
     ctx = get_context(sys.argv[1:])
     if ctx.command == "version":
@@ -496,6 +618,8 @@ def main() -> int:
             create_migration(ctx)
         elif ctx.command == "status":
             return show_status(ctx)
+        elif ctx.command == "dump":
+            return run_dump(ctx)
         elif ctx.command == "down":
             rollback(ctx)
         else:

@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Set, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from clickhouse_driver import Client
@@ -25,7 +25,16 @@ from clickhouse_migrations.defaults import (
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import STATUS_PENDING, Migrator, StatusRow
+from clickhouse_migrations.schema_dump import (
+    INNER_TABLE_PREFIXES,
+    LOCK_TABLE,
+    normalize_statement,
+    render_dump,
+    server_dependencies,
+    sort_by_dependency,
+)
 from clickhouse_migrations.util import (
+    format_table_reference,
     quote_identifier,
     quote_string,
     split_table_reference,
@@ -195,6 +204,110 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
 
         with self.connection(db_name) as conn:
             return [row["name"] for row in conn.query("SHOW TABLES")]
+
+    def _excluded_from_dump(self, db_name: str) -> Set[str]:
+        """Bookkeeping tables of this tool that a schema dump must not contain."""
+        table_db, table_name = split_table_reference(self.migrations_table)
+        if table_db not in (None, db_name):
+            return {LOCK_TABLE}
+        return {table_name, LOCK_TABLE, f"{table_name}_lock"}
+
+    def _dump_candidates(
+        self, known: Set[str], db_name: str, include_migrations_table: bool
+    ) -> Set[str]:
+        excluded = (
+            set() if include_migrations_table else self._excluded_from_dump(db_name)
+        )
+        return {
+            name
+            for name in known
+            if not name.startswith(INNER_TABLE_PREFIXES) and name not in excluded
+        }
+
+    def dump(
+        self,
+        db_name: Optional[str] = None,
+        tables: Optional[List[str]] = None,
+        keep_replicated_paths: bool = False,
+        include_migrations_table: bool = False,
+    ) -> str:
+        """Return the definition of the database objects as portable SQL.
+
+        Tables, views, materialized views and dictionaries, ordered so that
+        every object comes after the ones it reads from, one ``;`` terminated
+        statement each. Strictly read-only: nothing is created. ``tables``
+        limits the dump to those objects (a warning is logged for a listed
+        object that depends on an unlisted one). See ``schema_dump`` for the
+        normalisation rules.
+        """
+        db_name = db_name if db_name is not None else self.default_db_name
+        if not db_name:
+            raise MigrationException("A database name is required to dump the schema.")
+
+        with self.connection("") as conn:
+            if not conn.query(
+                f"SELECT 1 AS n FROM system.databases WHERE name = {quote_string(db_name)}"
+            ):
+                raise MigrationException(f"Database {db_name!r} does not exist.")
+
+            rows = conn.query(
+                "SELECT * FROM system.tables "
+                f"WHERE database = {quote_string(db_name)} AND NOT is_temporary "
+                "ORDER BY name"
+            )
+            known = {row["name"] for row in rows}
+            names = self._dump_candidates(known, db_name, include_migrations_table)
+            dependencies = server_dependencies(rows, db_name, names)
+            selected = self._select_dump_objects(names, tables, db_name)
+            statements = {}
+            for name in selected:
+                normalized = normalize_statement(
+                    self._show_create(conn, db_name, name),
+                    db_name,
+                    known,
+                    keep_replicated_paths,
+                )
+                statements[name] = normalized.text
+                dependencies[name] |= normalized.references
+
+        self._warn_about_unlisted(selected, dependencies, names)
+        order = sort_by_dependency(
+            {name: dependencies[name] - {name} for name in selected}
+        )
+        return render_dump([statements[name] for name in order])
+
+    @staticmethod
+    def _show_create(conn: Connection, db_name: str, name: str) -> str:
+        # Tables, views and dictionaries alike; the single column is named
+        # "statement", but take the first one to not depend on it.
+        rows = conn.query(f"SHOW CREATE TABLE {format_table_reference(db_name, name)}")
+        return str(next(iter(rows[0].values())))
+
+    @staticmethod
+    def _warn_about_unlisted(selected, dependencies, names) -> None:
+        for name in selected:
+            missing = sorted((dependencies[name] & names) - set(selected))
+            if missing:
+                logging.warning(
+                    "%s depends on %s, which is not part of the dump",
+                    name,
+                    ", ".join(missing),
+                )
+
+    @staticmethod
+    def _select_dump_objects(
+        names: Set[str], tables: Optional[List[str]], db_name: str
+    ) -> List[str]:
+        if not tables:
+            return sorted(names)
+
+        unknown = sorted(set(tables) - names)
+        if unknown:
+            raise MigrationException(
+                f"Not found in database {db_name!r} (or excluded from the dump): "
+                + ", ".join(unknown)
+            )
+        return sorted(set(tables))
 
     def migrate(
         self,

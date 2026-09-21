@@ -34,6 +34,7 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 * **Inspect before you apply** — [`status`](#migration-status) and `--dry-run` show applied vs pending migrations without touching data
 * **Scaffolding** — [`new`](#creating-a-migration) creates the next migration file for you, offline
 * **Configurable bookkeeping** — [rename the migrations table](#the-migrations-table) or set its engine (`--migrations-table` / `--migrations-table-engine`)
+* **Schema dump** — [`dump`](#dumping-the-schema) prints the live schema as normalised, dependency-ordered SQL, with `--check` for drift detection in CI
 * **Naive rollbacks** — optional paired [`{VERSION}_{name}.down.sql`](#rollbacks-down-migrations) files and a `down` subcommand to reverse applied migrations
 
 ## Known alternatives
@@ -248,6 +249,72 @@ For each migration in range (newest first) it runs the statements from the `.dow
 > **This is deliberately naive.** ClickHouse has no transactional DDL, so there is no *automatic* rollback and no all-or-nothing guarantee across statements. Reversible changes (`CREATE TABLE` ↔ `DROP TABLE`, `ADD COLUMN` ↔ `DROP COLUMN`) roll back cleanly; **destructive** operations (data-losing drops, `ALTER … DELETE/UPDATE` mutations) are your responsibility — nothing can bring dropped data back. For a *failed* migration you usually don't need `down` at all: a migration is recorded only after its statements succeed, so a failed one stays `pending` — just fix the SQL and re-run.
 
 `--steps` (default `1`), `--to`, `--dry-run` and `--multi-statement` apply to the `down` subcommand.
+
+### Dumping the schema
+
+`dump` prints the definition of every table, view, materialized view and dictionary of a database as portable, diffable SQL. It is strictly **read-only** (it never creates a database or a table) and works with both drivers and `--db-url`.
+
+```bash
+clickhouse-migrations dump --db-name test > schema.sql             # stdout carries only the SQL
+clickhouse-migrations dump --db-name test --out schema.sql         # atomic write, short confirmation on stderr
+clickhouse-migrations dump --db-name test --check schema.sql       # exit 1 + unified diff on drift (for CI)
+clickhouse-migrations dump --db-name test --tables events v_events # only these objects
+```
+
+Statements come in **dependency order** (a view, materialized view or dictionary always after the tables it reads from or writes to, based on the server's dependency columns plus the references found in the definitions; ties are broken by name, so the output is deterministic) and each one ends with `;`, separated by a blank line, with a trailing newline. A dependency cycle fails with a message naming it. The file replays into an empty database: `clickhouse-client --database other_db --multiquery < schema.sql`.
+
+| Flag | Env | Meaning |
+| --- | --- | --- |
+| `--db-url`, `--db-host`, `--db-port`, `--db-user`, `--db-password`, `--db-name`, `--driver`, `--secure`, `--log-level` | same as the other subcommands | Connection (the migrate-only flags such as `--dry-run` or `--migrations-dir` are not accepted) |
+| `--migrations-table` | `MIGRATIONS_TABLE` | Bookkeeping table to exclude (default `schema_versions`) |
+| `--tables NAME [NAME ...]` | `DUMP_TABLES` (comma separated) | Dump only these objects. Dependencies are **not** pulled in: a warning on stderr names each listed object that depends on an unlisted one. An unknown or excluded name is an error |
+| `--keep-replicated-paths` | `KEEP_REPLICATED_PATHS` | Keep the ZooKeeper path and replica arguments of `Replicated*MergeTree` |
+| `--include-migrations-table` | `INCLUDE_MIGRATIONS_TABLE` | Also dump the migrations table and the lock tables |
+| `--out FILE` | | Write to FILE (temp file + rename) instead of stdout |
+| `--check FILE` | | Compare with FILE instead of printing |
+
+`--out` and `--check` are mutually exclusive. **Exit codes:** `0` success (with `--check`: no drift); `1` drift with `--check` (unified diff, file to database, on stderr), or any error (missing database, unreadable `--check` file, dependency cycle, unknown `--tables` name, ...); `2` invalid arguments. Only whitespace at line ends and line endings are ignored when comparing. Logs, warnings and diffs go to stderr, so stdout is only ever the SQL.
+
+**What is normalised** (token based, never a blind text replace: string literals, comments and quoted identifiers are recognised):
+
+* `UUID '...'` (and `TO INNER UUID '...'`) is removed.
+* The database qualifier is removed from references to objects **of the dumped database**: `CREATE TABLE db.events` becomes `CREATE TABLE events`, and so do `db.events` inside `AS SELECT` bodies, `TO db.totals` of a materialized view, and `db`.`events` written with quotes. Only `db.name` where `name` is an existing object of that database is rewritten; other databases, `db.name(...)` calls, longer paths such as `x.db.name` and everything inside string literals or comments are left alone.
+* `Replicated*MergeTree('<zookeeper path>', '<replica>', ...)` (and `Shared*MergeTree`) loses its first two arguments unless `--keep-replicated-paths`; the remaining engine arguments stay (`ReplicatedReplacingMergeTree('/p', '{replica}', ver)` becomes `ReplicatedReplacingMergeTree(ver)`). The server fills in `default_replica_path`/`default_replica_name` (with `{shard}`/`{replica}` macros) when such a table is created, so the definition is portable across clusters. The table's own path (for the default it contains `{uuid}`) is not part of the dump; replaying an argument-less Replicated table needs `ON CLUSTER` or a `Replicated` database, exactly as if you had written it yourself. With `--keep-replicated-paths` the arguments are kept as the server shows them (with macros like `{shard}`, `{replica}` and `{uuid}` unexpanded).
+* The database argument of `Distributed('cluster', 'db', 'table')`, `Merge('db', ...)` and `Buffer('db', ...)`, when it names the dumped database, becomes `currentDatabase()` (the server evaluates it when the table is created, so replaying into another database points at that database).
+* `DB '<dumped db>'` is dropped from a *local* `SOURCE(CLICKHOUSE(... TABLE '...'))` dictionary source (one without `HOST`/`PORT`), which then reads from the dictionary's own database.
+* Trailing whitespace is removed. The text is otherwise what `SHOW CREATE TABLE` returns, so it is as stable as the server's own formatting.
+
+**Excluded:** the migrations table (`--migrations-table`), the lock tables (`schema_lock` and `<migrations table>_lock`) unless `--include-migrations-table`; materialized view storage (`.inner.*` / `.inner_id.*`, the view's own `CREATE` covers it) and temporary tables.
+
+**Known limitations**
+
+* Replay expects the target database to be the connection's default database (`--database` / `USE`): after normalisation references have no database prefix.
+* Database names inside string literals are never rewritten: `dictGet('db.dict', ...)`, `SOURCE(CLICKHOUSE(HOST ... DB 'db'))` (remote source), `Distributed` arguments given as anything but a plain string, dictionary `QUERY '...'` text, column comments. Such definitions still point at the original database after a replay into another one.
+* Secrets are masked by the server in `SHOW CREATE` (`[HIDDEN]`), so dictionaries or engines with passwords / keys will not replay as is.
+* The output follows the server's formatting, which differs between ClickHouse versions: compare dumps taken from the same server version (`--check` in CI against a fixed version). Tested on ClickHouse 25.7.
+* Only tables, views, materialized views and dictionaries are dumped (no users, roles, grants, functions or databases). Dependencies are per-object, so a dependency on an object of another database is not followed.
+* `diff` (turning a schema file into migrations) is not part of this command.
+
+Drift detection in CI (fails the job when the live schema no longer matches the committed `schema.sql`):
+
+```yaml
+name: schema-drift
+on: [pull_request]
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install clickhouse-migrations
+      - run: clickhouse-migrations dump --db-name mydb --check schema.sql
+        env:
+          DB_HOST: ${{ secrets.CLICKHOUSE_HOST }}
+          DB_PASSWORD: ${{ secrets.CLICKHOUSE_PASSWORD }}
+```
+
+From Python: `ClickhouseCluster(...).dump(db_name="mydb", tables=None, keep_replicated_paths=False, include_migrations_table=False)` returns the SQL text.
 
 ### In code
 ```python
