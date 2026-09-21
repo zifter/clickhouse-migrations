@@ -26,6 +26,9 @@ class _FakeConn:
     def command(self, statement):
         self.commands.append(statement)
 
+    def insert(self, _table, _rows):
+        self.commands.append("INSERT")
+
     def query(self, _query):
         return [
             {"version": v, "script": f"script{v}", "md5": f"md5{v}"}
@@ -426,3 +429,93 @@ def test_fake_migration_deletes_from_the_custom_table():
         for c in conn.commands
     )
     assert conn.inserts[0][0] == '"meta"."my_versions"'
+
+
+def _migs(*versions):
+    return [Migration(v, f"md5{v}", f"SELECT {v};") for v in versions]
+
+
+def test_apply_to_version_filters_pending():
+    conn = _FakeConn([])
+    migrator = Migrator(conn)
+
+    applied = migrator.apply_migration(_migs(1, 2, 3, 4), True, to_version=2)
+
+    assert [m.version for m in applied] == [1, 2]
+    assert "SELECT 3;" not in conn.commands
+    assert "SELECT 2;" in conn.commands
+
+
+def test_apply_to_version_only_pending_above_applied():
+    conn = _FakeConn([1])
+    migrator = Migrator(conn)
+
+    applied = migrator.apply_migration(_migs(1, 2, 3, 4), True, to_version=3)
+
+    assert [m.version for m in applied] == [2, 3]
+
+
+def test_apply_to_version_equal_to_highest_applied_is_noop():
+    conn = _FakeConn([1, 2])
+    migrator = Migrator(conn)
+
+    assert not migrator.apply_migration(_migs(1, 2, 3), True, to_version=2)
+    assert "SELECT 3;" not in conn.commands
+
+
+def test_apply_to_version_below_highest_applied_points_to_down():
+    conn = _FakeConn([1, 2, 3])
+    migrator = Migrator(conn)
+
+    with pytest.raises(MigrationException, match="down"):
+        migrator.apply_migration(_migs(1, 2, 3, 4), True, to_version=2)
+
+    assert not any(c.startswith("SELECT") for c in conn.commands)
+
+
+def test_apply_to_unknown_version_fails():
+    conn = _FakeConn([])
+    migrator = Migrator(conn)
+
+    with pytest.raises(MigrationException, match="not among the local"):
+        migrator.apply_migration(_migs(1, 2, 4), True, to_version=3)
+
+    assert not conn.commands
+
+
+def test_apply_to_version_still_checks_md5_above_target():
+    conn = _FakeConn([1, 2])
+    migrator = Migrator(conn)
+    incoming = _migs(1, 2, 3)
+    incoming[1] = Migration(2, "different", "SELECT 2;")
+
+    with pytest.raises(MigrationException, match="md5"):
+        migrator.apply_migration(incoming, True, to_version=1)
+
+
+def test_apply_to_version_still_checks_missing_migrations():
+    conn = _FakeConn([1, 2, 3])
+    migrator = Migrator(conn)
+
+    with pytest.raises(MigrationException, match="gone missing"):
+        migrator.apply_migration(_migs(1, 2), True, to_version=2)
+
+
+def test_apply_to_version_dry_run_executes_nothing():
+    conn = _FakeConn([])
+    migrator = Migrator(conn, dryrun=True)
+
+    applied = migrator.apply_migration(_migs(1, 2, 3), True, to_version=2)
+
+    assert [m.version for m in applied] == [1, 2]
+    assert not any(c.startswith("SELECT") for c in conn.commands)
+
+
+def test_apply_to_version_fake_marks_only_up_to_target():
+    conn = _FakeConn([])
+    migrator = Migrator(conn)
+
+    applied = migrator.apply_migration(_migs(1, 2, 3), True, fake=True, to_version=2)
+
+    assert [m.version for m in applied] == [1, 2]
+    assert "SELECT 3;" not in conn.commands

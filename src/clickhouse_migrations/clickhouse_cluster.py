@@ -192,8 +192,14 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         explicit_migrations: Optional[List[str]] = None,
         fake: bool = False,
         migration_log_format: str = "full",
+        to_version: Optional[int] = None,
     ):
         db_name = db_name if db_name is not None else self.default_db_name
+
+        if to_version is not None and explicit_migrations:
+            raise MigrationException(
+                "to_version and explicit_migrations are mutually exclusive."
+            )
 
         storage = MigrationStorage(migration_path)
         migrations = storage.migrations(explicit_migrations)
@@ -207,6 +213,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             dryrun=dryrun,
             fake=fake,
             migration_log_format=migration_log_format,
+            to_version=to_version,
         )
 
     def status(
@@ -265,6 +272,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         multi_statement: bool = True,
         fake: bool = False,
         migration_log_format: str = "full",
+        to_version: Optional[int] = None,
     ) -> List[Migration]:
         if create_db_if_no_exists:
             if cluster_name is None:
@@ -277,4 +285,6 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
                 conn, dryrun, migration_log_format=migration_log_format
             )
             migrator.init_schema(cluster_name)
-            return migrator.apply_migration(migrations, multi_statement, fake=fake)
+            return migrator.apply_migration(
+                migrations, multi_statement, fake=fake, to_version=to_version
+            )
