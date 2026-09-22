@@ -1,12 +1,14 @@
 import argparse
 import json
 import logging
+import math
 import os
+import re
 import sys
 import types
 from argparse import ArgumentParser
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from clickhouse_migrations import __version__
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
@@ -65,6 +67,8 @@ STATUS_FORMAT_JSON = "json"
 STATUS_FORMATS = (STATUS_FORMAT_TABLE, STATUS_FORMAT_JSON)
 
 SUBCOMMANDS = ("migrate", "status", "down", "new", "dump", "unlock", "version")
+
+SETTING_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _add_lock_arguments(parser):
@@ -179,6 +183,81 @@ def _add_common_arguments(parser):
         nargs="+",
         help="Explicit list of migrations to apply. "
         "Specify file name, file stem or migration version like 001_init.sql, 002_test2, 003, 4",
+    )
+    _add_transport_arguments(parser)
+
+
+def positive_float(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError:
+        number = math.nan
+    if not (math.isfinite(number) and number > 0):
+        raise argparse.ArgumentTypeError(f"expected a positive number, got {value!r}")
+    return number
+
+
+def parse_setting(item: str) -> Tuple[str, str]:
+    """Parse one ``name=value`` ClickHouse setting; the value is kept as text."""
+    name, sep, value = item.partition("=")
+    name = name.strip()
+    if not sep or not SETTING_NAME.fullmatch(name):
+        raise argparse.ArgumentTypeError(
+            f"expected a ClickHouse setting as name=value, got {item!r}"
+        )
+    return name, value.strip()
+
+
+def parse_settings(text: str) -> List[Tuple[str, str]]:
+    """Parse the comma-separated ``name=value`` list of CLICKHOUSE_SETTINGS."""
+    return [parse_setting(item) for item in text.split(",") if item.strip()]
+
+
+def _add_transport_arguments(parser):
+    parser.add_argument(
+        "--ca-cert",
+        default=os.environ.get("CLICKHOUSE_CA_CERT", None),
+        help="CA certificate file (PEM) to verify the server certificate with TLS",
+    )
+    parser.add_argument(
+        "--cert",
+        default=os.environ.get("CLICKHOUSE_CERT", None),
+        help="Client certificate file (PEM) for mutual TLS",
+    )
+    parser.add_argument(
+        "--key",
+        default=os.environ.get("CLICKHOUSE_KEY", None),
+        help="Private key file (PEM) of the client certificate, with --cert",
+    )
+    parser.add_argument(
+        "--verify",
+        default=cast_to_bool(os.environ.get("CLICKHOUSE_VERIFY", "1")),
+        action=argparse.BooleanOptionalAction,
+        help="Verify the TLS certificate of the server (--no-verify logs a warning)",
+    )
+    parser.add_argument(
+        "--connect-timeout",
+        default=os.environ.get("CLICKHOUSE_CONNECT_TIMEOUT", None),
+        type=positive_float,
+        help="Seconds to wait for the connection to be established "
+        "(default: the driver's, 10s)",
+    )
+    parser.add_argument(
+        "--query-timeout",
+        default=os.environ.get("CLICKHOUSE_QUERY_TIMEOUT", None),
+        type=positive_float,
+        help="Seconds to wait for the server while a statement runs "
+        "(socket read timeout; default: the driver's, 300s)",
+    )
+    parser.add_argument(
+        "--setting",
+        dest="settings",
+        default=None,
+        type=parse_setting,
+        action="append",
+        metavar="NAME=VALUE",
+        help="ClickHouse setting sent with every statement, repeatable "
+        "(env CLICKHOUSE_SETTINGS='a=1,b=2'; a flag wins over the variable)",
     )
 
 
@@ -321,6 +400,13 @@ DUMP_COMMON_OPTIONS = (
     "--migrations-table",
     "--log-level",
     "--secure",
+    "--ca-cert",
+    "--cert",
+    "--key",
+    "--verify",
+    "--connect-timeout",
+    "--query-timeout",
+    "--setting",
 )
 
 
@@ -433,12 +519,27 @@ def get_context(args):
     ctx = parser.parse_args(args)
     if ctx.command == "migrate" and ctx.to_version is not None and ctx.migrations:
         migrate_parser.error("--to cannot be combined with --migrations")
+    if hasattr(ctx, "settings"):
+        # Every subcommand that connects: the variable first, so a --setting
+        # of the same name wins.
+        try:
+            from_env = parse_settings(os.environ.get("CLICKHOUSE_SETTINGS", ""))
+            ctx.settings = dict(from_env + (ctx.settings or []))
+        except argparse.ArgumentTypeError as exc:
+            subparsers.choices[ctx.command].error(f"CLICKHOUSE_SETTINGS: {exc}")
 
     return ctx
 
 
 def create_cluster(ctx) -> ClickhouseCluster:
     return ClickhouseCluster(
+        ca_cert=ctx.ca_cert,
+        cert=ctx.cert,
+        key=ctx.key,
+        verify=ctx.verify,
+        connect_timeout=ctx.connect_timeout,
+        query_timeout=ctx.query_timeout,
+        settings=ctx.settings or None,
         db_host=ctx.db_host,
         db_port=ctx.db_port,
         db_user=ctx.db_user,
