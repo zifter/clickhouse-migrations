@@ -32,7 +32,12 @@ from clickhouse_migrations.defaults import (
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.lock import KeeperMapLock, LockHolder
 from clickhouse_migrations.migration import Migration, MigrationStorage
-from clickhouse_migrations.migrator import STATUS_PENDING, Migrator, StatusRow
+from clickhouse_migrations.migrator import (
+    STATUS_APPLIED,
+    STATUS_PENDING,
+    Migrator,
+    StatusRow,
+)
 from clickhouse_migrations.schema_dump import (
     INNER_TABLE_PREFIXES,
     LOCK_TABLE,
@@ -501,6 +506,131 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
                     multi_statement=multi_statement,
                     variables=resolved,
                     sources=storage.down_filenames(),
+                )
+
+    def baseline(
+        self,
+        db_name: Optional[str],
+        migration_path: Union[Path, str],
+        to_version: int,
+        cluster_name: Optional[str] = None,
+        create_db_if_no_exists: bool = True,
+        dryrun: bool = False,
+        lock: bool = LOCK,
+        lock_timeout: int = LOCK_TIMEOUT,
+        lock_ttl: int = LOCK_TTL,
+    ) -> List[StatusRow]:
+        """Adopt an existing database: record migrations up to ``to_version``.
+
+        Every local migration with a version <= ``to_version`` is recorded as
+        applied (md5 and script, like ``fake``) without executing anything.
+        Refused unless the bookkeeping table is absent or empty. With
+        ``dryrun`` nothing at all is created or written. Returns the status
+        the database has (with ``dryrun``: would have) afterwards.
+        """
+        db_name = db_name if db_name is not None else self.default_db_name
+
+        storage = MigrationStorage(migration_path)
+        migrations = storage.migrations()
+        down_versions = set(storage.down_scripts())
+        # Validate the target before touching the server at all.
+        Migrator.baseline_migrations(migrations, to_version)
+
+        if dryrun:
+            return self._baseline_dry_run(
+                db_name, migrations, to_version, down_versions
+            )
+
+        if create_db_if_no_exists:
+            self.create_db(db_name, cluster_name)
+
+        with self.migration_lock(
+            db_name, lock=lock, lock_timeout=lock_timeout, lock_ttl=lock_ttl
+        ):
+            with self.connection(db_name) as conn:
+                migrator = self._migrator(conn)
+                migrator.init_schema(cluster_name)
+                migrator.baseline(migrations, to_version)
+                return migrator.migration_status(migrations, down_versions)
+
+    def _baseline_dry_run(
+        self,
+        db_name: Optional[str],
+        migrations: List[Migration],
+        to_version: int,
+        down_versions: Set[int],
+    ) -> List[StatusRow]:
+        # Read-only: the history check only runs if the table already exists.
+        if self._is_initialized(db_name):
+            with self.connection(db_name) as conn:
+                selected = self._migrator(conn, dryrun=True).baseline(
+                    migrations, to_version
+                )
+        else:
+            selected = Migrator.baseline_migrations(migrations, to_version)
+            logging.info(
+                "Dry run mode, would record migrations %s as applied",
+                ", ".join(str(m.version) for m in selected),
+            )
+
+        recorded = {m.version for m in selected}
+        return [
+            StatusRow(
+                m.version,
+                STATUS_APPLIED if m.version in recorded else STATUS_PENDING,
+                m.md5,
+                None,
+                m.version in down_versions,
+            )
+            for m in migrations
+        ]
+
+    def repair(
+        self,
+        db_name: Optional[str],
+        migration_path: Union[Path, str],
+        versions: Optional[List[int]] = None,
+        write: bool = False,
+        prune: bool = False,
+        lock: bool = LOCK,
+        lock_timeout: int = LOCK_TIMEOUT,
+        lock_ttl: int = LOCK_TTL,
+    ) -> List[StatusRow]:
+        """Report, or with ``write`` fix, applied migrations out of sync.
+
+        See ``Migrator.repair``. Without ``write`` it is read-only and never
+        creates anything; the lock is only taken with ``write``.
+        """
+        db_name = db_name if db_name is not None else self.default_db_name
+        if prune and not write:
+            raise MigrationException("prune only works together with write.")
+
+        storage = MigrationStorage(migration_path)
+        incoming = storage.migrations()
+        down_versions = set(storage.down_scripts())
+
+        # Without a bookkeeping table nothing is applied, so nothing can be
+        # out of sync (but a requested version is still validated).
+        if not self._is_initialized(db_name):
+            return Migrator.select_repair_rows(
+                [StatusRow(m.version, STATUS_PENDING, m.md5, None) for m in incoming],
+                versions,
+            )
+
+        with self.migration_lock(
+            db_name,
+            lock=lock,
+            lock_timeout=lock_timeout,
+            lock_ttl=lock_ttl,
+            enabled=write,
+        ):
+            with self.connection(db_name) as conn:
+                return self._migrator(conn).repair(
+                    incoming,
+                    versions=versions,
+                    write=write,
+                    prune=prune,
+                    down_versions=down_versions,
                 )
 
     def apply_migrations(  # pylint: disable=too-many-locals

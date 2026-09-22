@@ -11,6 +11,7 @@ from clickhouse_migrations.substitution import substitute
 from clickhouse_migrations.util import (
     format_table_reference,
     quote_identifier,
+    quote_string,
     split_table_reference,
 )
 
@@ -30,6 +31,10 @@ STATUS_APPLIED = "applied"
 STATUS_PENDING = "pending"
 STATUS_MD5_MISMATCH = "md5-mismatch"
 STATUS_UNKNOWN = "unknown"
+# Only reported by repair: an unknown row that was deleted by --prune.
+STATUS_PRUNED = "pruned"
+# States repair works on: the bookkeeping disagrees with the local files.
+OUT_OF_SYNC_STATES = (STATUS_MD5_MISMATCH, STATUS_UNKNOWN)
 
 # One row of a migration status report. state is one of the STATUS_* values;
 # applied_at is None for migrations that have not been applied yet.
@@ -447,7 +452,161 @@ ORDER BY tuple(created_at)"""
 
         return targets
 
+    @staticmethod
+    def baseline_migrations(
+        migrations: List[Migration], to_version: int
+    ) -> List[Migration]:
+        """The local migrations a baseline up to ``to_version`` records."""
+        if to_version not in {m.version for m in migrations}:
+            raise MigrationException(
+                f"Baseline version {to_version} is not among the local migrations."
+            )
+
+        return sorted(
+            (m for m in migrations if m.version <= to_version),
+            key=lambda m: m.version,
+        )
+
+    def ensure_history_is_empty(self) -> None:
+        """Refuse to go on if the bookkeeping table records anything at all."""
+        count = self._conn.query(f"SELECT count() AS n FROM {self._table}")[0]["n"]
+        if count:
+            raise MigrationException(
+                f"Refusing to baseline: {self._table} already records {count} "
+                "migration row(s). baseline is only for a database without "
+                "migration history; use repair to fix changed migrations."
+            )
+
+    def baseline(self, migrations: List[Migration], to_version: int) -> List[Migration]:
+        """Record every local migration up to ``to_version`` as applied.
+
+        Nothing is executed. The bookkeeping table must exist (see
+        ``init_schema``) and be empty. With ``dryrun`` nothing is written.
+        """
+        selected = self.baseline_migrations(migrations, to_version)
+        self.ensure_history_is_empty()
+
+        for migration in selected:
+            logging.info(
+                "%s migration %s as applied without executing it",
+                "Dry run mode, would record" if self._dryrun else "Record",
+                self.format_migration_log(migration),
+            )
+
+        if not self._dryrun:
+            # One block, so the baseline lands as a whole or not at all.
+            self._insert_schema_versions(selected)
+
+        return selected
+
+    @staticmethod
+    def select_repair_rows(
+        status_rows: List[StatusRow], versions: Optional[List[int]] = None
+    ) -> List[StatusRow]:
+        """The out-of-sync status rows, narrowed to ``versions`` if given.
+
+        Every requested version must be out of sync (``md5-mismatch`` or
+        ``unknown``); naming one that is in sync, pending or absent is an
+        error, so a typo never silently repairs nothing.
+        """
+        rows = [r for r in status_rows if r.state in OUT_OF_SYNC_STATES]
+        if not versions:
+            return rows
+
+        states = {r.version: r.state for r in status_rows}
+        wanted = set(versions)
+        invalid = sorted(v for v in wanted if states.get(v) not in OUT_OF_SYNC_STATES)
+        if invalid:
+            details = ", ".join(f"{v} ({states.get(v, 'not found')})" for v in invalid)
+            raise MigrationException(
+                "Nothing to repair for version(s) "
+                f"{details}: only {' and '.join(OUT_OF_SYNC_STATES)} "
+                "migrations can be repaired."
+            )
+
+        return [r for r in rows if r.version in wanted]
+
+    def repair(
+        self,
+        incoming: List[Migration],
+        versions: Optional[List[int]] = None,
+        write: bool = False,
+        prune: bool = False,
+        down_versions: Optional[Set[int]] = None,
+    ) -> List[StatusRow]:
+        """Report, or with ``write`` fix, applied migrations out of sync.
+
+        ``md5-mismatch`` rows get the md5 and script of the local file;
+        ``unknown`` rows (applied, no local file) are deleted only with
+        ``prune``. Without ``write`` nothing changes and the out-of-sync rows
+        are returned. With it, the returned rows show the state afterwards:
+        ``applied`` for a repaired migration, ``pruned`` for a deleted row and
+        ``unknown`` for one left alone.
+        """
+        if prune and not write:
+            raise MigrationException("prune only works together with write.")
+
+        plan = self.select_repair_rows(
+            self.migration_status(incoming, down_versions), versions
+        )
+        if not write:
+            return plan
+
+        local = {m.version: m for m in incoming}
+        changed = False
+        for row in plan:
+            if row.state == STATUS_MD5_MISMATCH:
+                logging.info(
+                    "Repair migration %s: md5 %s -> %s",
+                    row.version,
+                    row.md5,
+                    local[row.version].md5,
+                )
+                self._replace_schema_version(local[row.version])
+                changed = True
+            elif prune:
+                logging.info("Prune unknown migration %s", row.version)
+                self._delete_schema_version(row.version)
+                changed = True
+            else:
+                logging.warning(
+                    "Migration %s is applied but has no local file; "
+                    "pass prune to delete its row.",
+                    row.version,
+                )
+
+        if changed:
+            self.optimize_schema_table()
+
+        after = {r.version: r for r in self.migration_status(incoming, down_versions)}
+        return [
+            after.get(row.version, row._replace(state=STATUS_PRUNED)) for row in plan
+        ]
+
+    def _replace_schema_version(self, migration: Migration) -> None:
+        # Insert the fresh row first and only then delete the stale ones, so a
+        # failure in between never leaves the migration looking pending (which
+        # would make the next migrate execute it again). mutations_sync = 2
+        # waits for every replica, so status sees the result right away.
+        self._insert_schema_version(migration)
+        self._conn.command(
+            f"ALTER TABLE {self._table} "
+            f"DELETE WHERE version = {int(migration.version)} "
+            f"AND md5 != {quote_string(migration.md5)} "
+            "SETTINGS mutations_sync = 2"
+        )
+
+    def _delete_schema_version(self, version: int) -> None:
+        self._conn.command(
+            f"ALTER TABLE {self._table} "
+            f"DELETE WHERE version = {int(version)} "
+            "SETTINGS mutations_sync = 2"
+        )
+
     def _insert_schema_version(self, migration: Migration) -> None:
+        self._insert_schema_versions([migration])
+
+    def _insert_schema_versions(self, migrations: List[Migration]) -> None:
         self._conn.insert(
             self._table,
             [
@@ -456,6 +615,7 @@ ORDER BY tuple(created_at)"""
                     "script": migration.script,
                     "md5": migration.md5,
                 }
+                for migration in migrations
             ],
         )
 

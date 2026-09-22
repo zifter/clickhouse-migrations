@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 import argparse
 import json
 import logging
@@ -67,7 +68,17 @@ STATUS_FORMAT_TABLE = "table"
 STATUS_FORMAT_JSON = "json"
 STATUS_FORMATS = (STATUS_FORMAT_TABLE, STATUS_FORMAT_JSON)
 
-SUBCOMMANDS = ("migrate", "status", "down", "new", "dump", "unlock", "version")
+SUBCOMMANDS = (
+    "migrate",
+    "status",
+    "down",
+    "new",
+    "dump",
+    "unlock",
+    "baseline",
+    "repair",
+    "version",
+)
 
 SETTING_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -370,6 +381,10 @@ def _add_status_arguments(parser):
         action=argparse.BooleanOptionalAction,
         help="Exit with code 1 if any migration is pending",
     )
+    _add_format_argument(parser)
+
+
+def _add_format_argument(parser):
     parser.add_argument(
         "--format",
         default=os.environ.get("STATUS_FORMAT", STATUS_FORMAT_TABLE),
@@ -469,6 +484,73 @@ def _only_options(parser, allowed):
     return types.SimpleNamespace(add_argument=add_argument)
 
 
+# baseline and repair work on the whole migrations directory, so they take the
+# common options except --migrations (a partial list would make every other
+# applied migration look "unknown" to repair).
+BASELINE_COMMON_OPTIONS = DUMP_COMMON_OPTIONS + (
+    "--migrations-dir",
+    "--cluster-name",
+    "--migrations-table-engine",
+)
+REPAIR_COMMON_OPTIONS = DUMP_COMMON_OPTIONS + ("--migrations-dir",)
+
+
+def _add_baseline_arguments(parser):
+    _add_common_arguments(_only_options(parser, BASELINE_COMMON_OPTIONS))
+    # Required and without an environment variable, like "migrate --to".
+    parser.add_argument(
+        "--to",
+        dest="to_version",
+        required=True,
+        type=int,
+        help="Record every local migration up to and including this version "
+        "as applied, without executing anything",
+    )
+    parser.add_argument(
+        "--dry-run",
+        default=cast_to_bool(os.environ.get("DRY_RUN", "0")),
+        action=argparse.BooleanOptionalAction,
+        help="Print what would be recorded and write nothing",
+    )
+    parser.add_argument(
+        "--create-db-if-not-exists",
+        default=cast_to_bool(os.environ.get("CREATE_DB_IF_NOT_EXISTS", "1")),
+        action=argparse.BooleanOptionalAction,
+        help="Create database if it does not exist",
+    )
+    _add_format_argument(parser)
+    _add_lock_arguments(parser)
+
+
+def _add_repair_arguments(parser):
+    _add_common_arguments(_only_options(parser, REPAIR_COMMON_OPTIONS))
+    # Deliberately no environment variables: rewriting the bookkeeping must
+    # be asked for on the command line.
+    parser.add_argument(
+        "--write",
+        default=False,
+        action="store_true",
+        help="Apply the repair; without it only report what is out of sync",
+    )
+    parser.add_argument(
+        "--version",
+        dest="versions",
+        default=[],
+        action="append",
+        type=int,
+        help="Repair only this version (repeatable); it must be md5-mismatch or unknown",
+    )
+    parser.add_argument(
+        "--prune",
+        default=False,
+        action="store_true",
+        help="With --write, also delete the rows of unknown migrations "
+        "(applied, but no local file any more)",
+    )
+    _add_format_argument(parser)
+    _add_lock_arguments(parser)
+
+
 def _add_dump_arguments(parser):
     _add_common_arguments(_only_options(parser, DUMP_COMMON_OPTIONS))
     default_tables = os.environ.get("DUMP_TABLES", "")
@@ -557,6 +639,19 @@ def get_context(args):
     )
     _add_dump_arguments(dump_parser)
 
+    baseline_parser = subparsers.add_parser(
+        "baseline",
+        help="Adopt an existing database: record migrations up to --to as applied "
+        "without executing them",
+    )
+    _add_baseline_arguments(baseline_parser)
+
+    repair_parser = subparsers.add_parser(
+        "repair",
+        help="Report (or with --write fix) applied migrations whose file changed",
+    )
+    _add_repair_arguments(repair_parser)
+
     subparsers.add_parser("version", help="Show the version and exit")
 
     # Default to the "migrate" subcommand so existing invocations
@@ -580,6 +675,8 @@ def get_context(args):
             subparsers.choices[ctx.command].error(f"CLICKHOUSE_SETTINGS: {exc}")
     if ctx.command in ("migrate", "down"):
         _resolve_var_arguments(subparsers.choices[ctx.command], ctx)
+    if ctx.command == "repair" and ctx.prune and not ctx.write:
+        repair_parser.error("--prune requires --write")
 
     return ctx
 
@@ -652,6 +749,33 @@ def do_rollback(cluster, ctx) -> List[int]:
         lock_ttl=ctx.lock_ttl,
         variables=ctx.variables,
         substitute_env=ctx.substitute_env,
+    )
+
+
+def do_baseline(cluster, ctx) -> List[StatusRow]:
+    return cluster.baseline(
+        db_name=ctx.db_name,
+        migration_path=ctx.migrations_dir,
+        to_version=ctx.to_version,
+        cluster_name=ctx.cluster_name,
+        create_db_if_no_exists=ctx.create_db_if_not_exists,
+        dryrun=ctx.dry_run,
+        lock=ctx.lock,
+        lock_timeout=ctx.lock_timeout,
+        lock_ttl=ctx.lock_ttl,
+    )
+
+
+def do_repair(cluster, ctx) -> List[StatusRow]:
+    return cluster.repair(
+        db_name=ctx.db_name,
+        migration_path=ctx.migrations_dir,
+        versions=ctx.versions,
+        write=ctx.write,
+        prune=ctx.prune,
+        lock=ctx.lock,
+        lock_timeout=ctx.lock_timeout,
+        lock_ttl=ctx.lock_ttl,
     )
 
 
@@ -749,6 +873,46 @@ def show_status(ctx) -> int:
     return status_exit_code(rows, ctx.strict, ctx.exit_code_pending)
 
 
+def _print_rows(ctx, cluster, rows: List[StatusRow], empty_message: str) -> None:
+    if ctx.format == STATUS_FORMAT_JSON:
+        db_name = ctx.db_name if ctx.db_name is not None else cluster.default_db_name
+        print(format_status_json(db_name, rows))
+    else:
+        print(format_status(rows) if rows else empty_message)
+
+
+def run_baseline(ctx) -> int:
+    """Record migrations up to --to as applied; print the resulting status."""
+    logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
+
+    cluster = create_cluster(ctx)
+    rows = do_baseline(cluster, ctx)
+    if ctx.dry_run:
+        logging.warning("Dry run: nothing was recorded, the status would become:")
+    _print_rows(ctx, cluster, rows, "No migrations found.")
+    return 0
+
+
+def run_repair(ctx) -> int:
+    """Report (exit code 1 if anything is out of sync) or fix with --write."""
+    logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
+
+    cluster = create_cluster(ctx)
+    rows = do_repair(cluster, ctx)
+    _print_rows(
+        ctx,
+        cluster,
+        rows,
+        "Nothing to repair: every applied migration matches its local file.",
+    )
+    if ctx.write:
+        return 0
+    if rows:
+        logging.warning("Run again with --write to repair (and --prune for unknown).")
+        return 1
+    return 0
+
+
 def rollback(ctx) -> List[int]:
     logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
     warn_debug_with_substitution(ctx)
@@ -839,20 +1003,25 @@ def main() -> int:
     if ctx.command == "version":
         print(f"clickhouse-migrations {__version__}")
         return 0
+    code = 0
     try:
         if ctx.command == "new":
             create_migration(ctx)
         elif ctx.command == "status":
-            return show_status(ctx)
+            code = show_status(ctx)
         elif ctx.command == "dump":
-            return run_dump(ctx)
+            code = run_dump(ctx)
         elif ctx.command == "down":
             rollback(ctx)
         elif ctx.command == "unlock":
-            return unlock(ctx)
+            code = unlock(ctx)
+        elif ctx.command == "baseline":
+            code = run_baseline(ctx)
+        elif ctx.command == "repair":
+            code = run_repair(ctx)
         else:
             migrate(ctx)
     except MigrationException as exc:
         logging.error("Migration failed: %s", exc)
-        return 1
-    return 0
+        code = 1
+    return code
