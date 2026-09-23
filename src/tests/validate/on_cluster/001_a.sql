@@ -1,0 +1,1 @@
+CREATE TABLE a ON CLUSTER c (id UInt32) ENGINE = MergeTree() ORDER BY id;

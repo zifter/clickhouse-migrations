@@ -1,0 +1,12 @@
+- id: clickhouse-migrations-validate
+  name: clickhouse-migrations validate
+  description: Check the migrations directory offline (file names, versions, down pairs, statement splitting).
+  entry: clickhouse-migrations validate
+  language: python
+  # The whole directory is validated (gaps, duplicates and pairs need all
+  # files), so only run when a .sql file changed and do not pass file names.
+  pass_filenames: false
+  files: \.sql$
+  # Override in your .pre-commit-config.yaml, e.g.
+  # args: [--migrations-dir, db/migrations, --strict]
+  args: [--migrations-dir, migrations]

@@ -1,0 +1,2 @@
+ALTER TABLE events REMOVE TTL;
+ALTER TABLE events DROP COLUMN created;

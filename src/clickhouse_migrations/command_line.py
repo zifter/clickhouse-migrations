@@ -36,6 +36,12 @@ from clickhouse_migrations.migrator import (
 )
 from clickhouse_migrations.schema_dump import diff_dumps, write_text_atomic
 from clickhouse_migrations.substitution import parse_assignment
+from clickhouse_migrations.validate import (
+    format_validate,
+    format_validate_json,
+    validate_exit_code,
+    validate_migrations,
+)
 
 
 def log_level(value: str) -> str:
@@ -77,6 +83,7 @@ SUBCOMMANDS = (
     "unlock",
     "baseline",
     "repair",
+    "validate",
     "version",
 )
 
@@ -451,6 +458,36 @@ def _add_new_arguments(parser):
     )
 
 
+def _add_validate_arguments(parser):
+    # Like "new", "validate" never connects to ClickHouse: no database options.
+    parser.add_argument(
+        "--dir",
+        "--migrations-dir",
+        dest="migrations_dir",
+        default=os.environ.get("MIGRATIONS_DIR", MIGRATIONS_DIR),
+        type=Path,
+        help="Path to the directory with migration files",
+    )
+    parser.add_argument(
+        "--strict",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="Exit with code 1 on warnings too, not only on errors",
+    )
+    parser.add_argument(
+        "--require-down",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="Report a migration without a paired .down.sql as an error",
+    )
+    parser.add_argument(
+        "--format",
+        default=STATUS_FORMAT_TABLE,
+        choices=STATUS_FORMATS,
+        help="Output format: table or json (json prints only the JSON document to stdout)",
+    )
+
+
 # Connection options "dump" shares with the other subcommands. It is read-only,
 # so it takes none of the migrate/down options (dry-run, migrations-dir, ...).
 DUMP_COMMON_OPTIONS = (
@@ -651,6 +688,11 @@ def get_context(args):
         help="Report (or with --write fix) applied migrations whose file changed",
     )
     _add_repair_arguments(repair_parser)
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="Check the migrations directory offline, without any database",
+    )
+    _add_validate_arguments(validate_parser)
 
     subparsers.add_parser("version", help="Show the version and exit")
 
@@ -998,6 +1040,21 @@ def run_dump(ctx) -> int:
     return 0
 
 
+def run_validate(ctx) -> int:
+    """Print the validate report; exit code 1 on errors (or warnings with --strict)."""
+    try:
+        report = validate_migrations(ctx.migrations_dir, require_down=ctx.require_down)
+    except MigrationException as exc:
+        logging.error("Validation failed: %s", exc)
+        return 1
+
+    if ctx.format == STATUS_FORMAT_JSON:
+        print(format_validate_json(report))
+    else:
+        print(format_validate(report))
+    return validate_exit_code(report, ctx.strict)
+
+
 def main() -> int:
     ctx = get_context(sys.argv[1:])
     if ctx.command == "version":
@@ -1011,6 +1068,8 @@ def main() -> int:
             code = show_status(ctx)
         elif ctx.command == "dump":
             code = run_dump(ctx)
+        elif ctx.command == "validate":
+            code = run_validate(ctx)
         elif ctx.command == "down":
             rollback(ctx)
         elif ctx.command == "unlock":
