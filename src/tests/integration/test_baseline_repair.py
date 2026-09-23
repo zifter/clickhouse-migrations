@@ -572,3 +572,8 @@ def test_lock(cluster, select_dir, monkeypatch, capsys, caplog):
     }
     with cluster.connection("pytest") as conn:
         assert KeeperMapLock(conn, "pytest").holder() is None
+
+
+def test_repair_prune_needs_write(cluster, select_dir):
+    with pytest.raises(MigrationException, match="prune only works together"):
+        cluster.repair("pytest", select_dir, prune=True)
