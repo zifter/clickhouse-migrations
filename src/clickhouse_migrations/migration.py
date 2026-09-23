@@ -66,27 +66,34 @@ class MigrationStorage:
             if f.name.endswith(".sql") and not f.name.endswith(DOWN_SUFFIX)
         ]
 
-    def down_scripts(self) -> Dict[int, str]:
+    def down_filenames(self) -> Dict[int, str]:
+        """Version -> file name of every ``.down.sql`` file."""
         self._require_dir()
 
-        scripts: Dict[int, str] = {}
-        seen_versions: Dict[int, str] = {}
+        names: Dict[int, str] = {}
         for entry in os.scandir(self.storage_dir):
             if not entry.name.endswith(DOWN_SUFFIX):
                 continue
 
             version_number = _parse_version(entry.name)
-            if version_number in seen_versions:
+            if version_number in names:
                 raise MigrationException(
                     f"Duplicate down migration version {version_number}: "
-                    f"{seen_versions[version_number]} and {entry.name}"
+                    f"{names[version_number]} and {entry.name}"
                 )
-            seen_versions[version_number] = entry.name
-            scripts[version_number] = (self.storage_dir / entry.name).read_text(
-                encoding="utf8"
-            )
+            names[version_number] = entry.name
 
-        return scripts
+        return names
+
+    def down_scripts(self) -> Dict[int, str]:
+        return {
+            version: (self.storage_dir / name).read_text(encoding="utf8")
+            for version, name in self.down_filenames().items()
+        }
+
+    def migration_filenames(self) -> Dict[int, str]:
+        """Version -> file name of every migration (not ``.down.sql``) file."""
+        return {_parse_version(path.name): path.name for path in self.filenames()}
 
     def _existing_files(self) -> List[Tuple[int, str]]:
         # Both up and down files take part: the version of a migration is owned

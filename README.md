@@ -36,6 +36,7 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 * **Configurable bookkeeping** — [rename the migrations table](#the-migrations-table) or set its engine (`--migrations-table` / `--migrations-table-engine`)
 * **Schema dump** — [`dump`](#dumping-the-schema) prints the live schema as normalised, dependency-ordered SQL, with `--check` for drift detection in CI
 * **Safe concurrent runs** — an opt-in [migration lock](#concurrent-runs-and-locking) (`--lock`) so several replicas of a Kubernetes `Job` cannot interleave
+* **Per-environment SQL** — opt-in [`${NAME}` substitution](#variable-substitution) (`--var` / `--substitute-env`) for cluster names, dictionary sources and the like, with checksums taken from the raw file
 * **Naive rollbacks** — optional paired [`{VERSION}_{name}.down.sql`](#rollbacks-down-migrations) files and a `down` subcommand to reverse applied migrations
 
 ## Known alternatives
@@ -158,6 +159,8 @@ CLI flag | Environment variable | Default
 `--lock` / `--no-lock` | `LOCK` | `false`
 `--lock-timeout` | `LOCK_TIMEOUT` | `300`
 `--lock-ttl` | `LOCK_TTL` | `3600`
+`--var NAME=VALUE` (repeatable, `migrate` / `down`) | `MIGRATION_VARS` (`A=1,B=2`) | —
+`--substitute-env` / `--no-substitute-env` (`migrate` / `down`) | `SUBSTITUTE_ENV` | `false`
 `--secure` | `SECURE` | `false`
 `--ca-cert`, `--cert`, `--key`, `--verify`, `--connect-timeout`, `--query-timeout`, `--setting` | `CLICKHOUSE_*` | see [Transport and TLS](#transport-and-tls)
 `--log-level` | `LOG_LEVEL` | `WARNING`
@@ -281,6 +284,78 @@ For each migration in range (newest first) it runs the statements from the `.dow
 
 `--steps` (default `1`), `--to`, `--dry-run` and `--multi-statement` apply to the `down` subcommand.
 
+### Variable substitution
+
+Some SQL cannot be committed literally because it differs per environment: the cluster name of
+`ON CLUSTER`, the host and credentials of a dictionary source, … For these, migration files
+(and `.down.sql` files) may contain `${NAME}` placeholders:
+
+```sql
+-- migrations/003_events.sql
+CREATE TABLE events ON CLUSTER ${CLUSTER_NAME} (id UInt64)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{database}/{table}', '{replica}')
+ORDER BY id;
+
+CREATE DICTIONARY users_dict ON CLUSTER ${CLUSTER_NAME} (id UInt64, name String)
+PRIMARY KEY id
+SOURCE(POSTGRESQL(HOST '${PG_HOST}' PORT 5432 USER 'reader' PASSWORD '${PG_PASSWORD}' DB 'app' TABLE 'users'))
+LAYOUT(HASHED()) LIFETIME(300);
+```
+
+Substitution is **off by default** — without the options below files are executed byte for byte,
+so existing migrations that happen to contain `${...}` text keep working. It is enabled by:
+
+* `--var NAME=VALUE` (repeatable; env `MIGRATION_VARS=A=1,B=2`, ignored when `--var` is given) —
+  on its own it substitutes **only** the given variables;
+* `--substitute-env` (env `SUBSTITUTE_ENV=true`) — additionally takes values from the process
+  environment. `--var` wins over the environment.
+
+```bash
+clickhouse-migrations migrate --db-name test --cluster-name company_cluster \
+    --var CLUSTER_NAME=company_cluster --substitute-env   # PG_HOST, PG_PASSWORD from the env
+clickhouse-migrations down --var CLUSTER_NAME=company_cluster ...
+```
+
+In Python: `cluster.migrate(..., variables={"CLUSTER_NAME": "company_cluster"}, substitute_env=False)`
+(the same two parameters exist on `rollback`). Only `migrate` and `down` substitute; `status` and
+`dump` never read variables.
+
+Rules:
+
+* `${NAME}` is replaced with the value of `NAME`; a valid name matches `[A-Za-z_][A-Za-z0-9_]*`.
+* An **unset** `NAME` fails the run. Every pending migration (or every down script in range) is
+  substituted before the first one executes, so an unset variable fails before any migration SQL runs.
+* `$${NAME}` is an escape and becomes a literal `${NAME}`. Any other `$` is left alone.
+* A malformed (`${PG-HOST}`, `${}`) or unterminated (`${PG_HOST` — no `}` on the same line)
+  placeholder fails too. Errors name the file, the line and the placeholder, never a value.
+* `--fake` executes nothing, so it substitutes nothing and needs no variables.
+* `--dry-run` substitutes (so it fails on unset variables exactly like a real run) but logs the
+  statements **with their placeholders**, not the substituted SQL.
+
+> **Quoting is your responsibility.** Substitution is textual (`envsubst`-style): SQL is not parsed
+> and values are not escaped. A value inside `'...'` must not contain `'` or `\`; a value used as
+> an identifier must be a valid identifier. A value can even add statements (`1; DROP ...`), so
+> only pass values you trust.
+
+**The checksum is taken from the raw file, before substitution**, and `schema_versions.script`
+stores the raw text too. A migration therefore has the same md5 in every environment and values
+(possibly secrets) never land in `schema_versions`. The consequences:
+
+* an applied migration is **not re-run when a variable changes** — ship a new migration instead;
+* changing a variable never makes `status` report `md5-mismatch`.
+
+**Where values can still show up.** Our own log messages never contain substituted values (the
+`full` migration log format shows the raw script, statements are logged raw). But the substituted
+SQL is what the server receives, so:
+
+* it is recorded by the server, e.g. in `system.query_log`, and may appear in server-side error
+  messages (a failing statement's error text can quote it);
+* with `--log-level DEBUG` the driver's own debug log (`clickhouse-driver` logs every query it
+  sends) prints it — the CLI warns when DEBUG is combined with substitution.
+
+Keep that in mind before putting passwords into variables; for dictionary sources consider
+[named collections](https://clickhouse.com/docs/en/operations/named-collections) instead.
+
 ### Dumping the schema
 
 `dump` prints the definition of every table, view, materialized view and dictionary of a database as portable, diffable SQL. It is strictly **read-only** (it never creates a database or a table) and works with both drivers and `--db-url`.
@@ -396,6 +471,8 @@ Parameter | Description | Default
 `lock` | Take the [migration lock](#concurrent-runs-and-locking) for the run (opt-in; fails if the server cannot provide it) | `False`
 `lock_timeout` | Seconds to wait for a lock held by another run (`0` fails immediately) | `300`
 `lock_ttl` | Seconds after which a lock is considered stale and may be taken over | `3600`
+`variables` | `{"NAME": "value"}` for [`${NAME}` substitution](#variable-substitution); enables it on its own (also on `rollback`) | `None`
+`substitute_env` | Also substitute from the process environment; `variables` win (also on `rollback`) | `False`
 `secure` | Use secure (TLS) connection | `False`
 `ca_cert`, `cert`, `key`, `verify`, `connect_timeout`, `query_timeout`, `settings` | Constructor parameters of `ClickhouseCluster`, same meaning as the [transport options](#transport-and-tls) (`settings` is a dict); `None` keeps the driver default. Other keyword arguments still go to `clickhouse_driver.Client` as is (now also with `db_url`), and an explicit parameter wins over a keyword argument for the same driver parameter | `None`
 `migration_log_format` | Migration log format `full` logs the full Migration object, `compact` logs only version and md5 | `full`

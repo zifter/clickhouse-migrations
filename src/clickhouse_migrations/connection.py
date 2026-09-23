@@ -162,7 +162,13 @@ class Connection(ABC):
 
     @abstractmethod
     def command(self, statement: str) -> None:
-        """Execute a statement that does not return rows (DDL/DML)."""
+        """Execute a statement that does not return rows (DDL/DML).
+
+        The built-in connections also accept an optional ``log_statement``:
+        what their debug log shows instead of ``statement``. The migrator
+        passes it (only) for a statement whose ``${NAME}`` placeholders were
+        substituted, with the raw text, so values never reach our logs.
+        """
         raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
@@ -190,8 +196,8 @@ class ClickhouseDriverConnection(Connection):
     def __init__(self, client):
         self._client = client
 
-    def command(self, statement: str) -> None:
-        logging.debug(statement)
+    def command(self, statement: str, log_statement: Optional[str] = None) -> None:
+        logging.debug(statement if log_statement is None else log_statement)
         self._client.execute(statement)
 
     def query(self, statement: str) -> List[Dict]:
@@ -224,8 +230,8 @@ class ClickhouseConnectConnection(Connection):
     def __init__(self, client):
         self._client = client
 
-    def command(self, statement: str) -> None:
-        logging.debug(statement)
+    def command(self, statement: str, log_statement: Optional[str] = None) -> None:
+        logging.debug(statement if log_statement is None else log_statement)
         self._client.command(statement)
 
     def query(self, statement: str) -> List[Dict]:

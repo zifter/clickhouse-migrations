@@ -34,6 +34,7 @@ from clickhouse_migrations.migrator import (
     StatusRow,
 )
 from clickhouse_migrations.schema_dump import diff_dumps, write_text_atomic
+from clickhouse_migrations.substitution import parse_assignment
 
 
 def log_level(value: str) -> str:
@@ -94,6 +95,54 @@ def _add_lock_arguments(parser):
         help="Seconds after which a lock is considered stale and may be taken "
         f"over by another run, with --lock (default: {LOCK_TTL})",
     )
+
+
+def var_assignment(value: str) -> Tuple[str, str]:
+    try:
+        return parse_assignment(value)
+    except ValueError as exc:
+        # ArgumentTypeError prints only this message, never the value itself,
+        # which may be a secret.
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+# Env counterpart of the repeatable --var: comma-separated NAME=VALUE pairs.
+MIGRATION_VARS_ENV = "MIGRATION_VARS"
+
+
+def _add_substitution_arguments(parser):
+    parser.add_argument(
+        "--var",
+        dest="variables",
+        action="append",
+        default=None,
+        type=var_assignment,
+        metavar="NAME=VALUE",
+        help="Substitute ${NAME} in migration files with VALUE (repeatable). "
+        "Enables substitution on its own; wins over --substitute-env. "
+        f"Env: {MIGRATION_VARS_ENV}=A=1,B=2 (ignored when --var is given)",
+    )
+    parser.add_argument(
+        "--substitute-env",
+        default=cast_to_bool(os.environ.get("SUBSTITUTE_ENV", "0")),
+        action=argparse.BooleanOptionalAction,
+        help="Substitute ${NAME} in migration files from the process environment",
+    )
+
+
+def _resolve_var_arguments(parser, ctx) -> None:
+    """Turn the --var pairs (or MIGRATION_VARS) into a dict, None if unset."""
+    pairs = ctx.variables
+    if pairs is None:
+        raw = os.environ.get(MIGRATION_VARS_ENV, "")
+        items = [item for item in raw.split(",") if item]
+        if items:
+            try:
+                pairs = [parse_assignment(item) for item in items]
+            except ValueError as exc:
+                parser.error(f"{MIGRATION_VARS_ENV}: {exc}")
+
+    ctx.variables = dict(pairs) if pairs is not None else None
 
 
 def _add_common_arguments(parser):
@@ -474,6 +523,7 @@ def get_context(args):
     _add_migrate_arguments(migrate_parser)
     _add_migrate_target_argument(migrate_parser)
     _add_lock_arguments(migrate_parser)
+    _add_substitution_arguments(migrate_parser)
 
     status_parser = subparsers.add_parser(
         "status", help="Show applied vs pending migrations without applying anything"
@@ -488,6 +538,7 @@ def get_context(args):
     _add_common_arguments(down_parser)
     _add_down_arguments(down_parser)
     _add_lock_arguments(down_parser)
+    _add_substitution_arguments(down_parser)
 
     unlock_parser = subparsers.add_parser(
         "unlock",
@@ -527,6 +578,8 @@ def get_context(args):
             ctx.settings = dict(from_env + (ctx.settings or []))
         except argparse.ArgumentTypeError as exc:
             subparsers.choices[ctx.command].error(f"CLICKHOUSE_SETTINGS: {exc}")
+    if ctx.command in ("migrate", "down"):
+        _resolve_var_arguments(subparsers.choices[ctx.command], ctx)
 
     return ctx
 
@@ -567,6 +620,8 @@ def do_migrate(cluster, ctx) -> List[Migration]:
         lock=ctx.lock,
         lock_timeout=ctx.lock_timeout,
         lock_ttl=ctx.lock_ttl,
+        variables=ctx.variables,
+        substitute_env=ctx.substitute_env,
     )
 
 
@@ -595,6 +650,8 @@ def do_rollback(cluster, ctx) -> List[int]:
         lock=ctx.lock,
         lock_timeout=ctx.lock_timeout,
         lock_ttl=ctx.lock_ttl,
+        variables=ctx.variables,
+        substitute_env=ctx.substitute_env,
     )
 
 
@@ -659,8 +716,19 @@ def status_exit_code(
     return 1 if any(row.state in failing for row in rows) else 0
 
 
+def warn_debug_with_substitution(ctx) -> None:
+    """Our own logs never show substituted values, but the drivers' do."""
+    if ctx.log_level == "DEBUG" and (ctx.variables is not None or ctx.substitute_env):
+        logging.warning(
+            "--log-level DEBUG with variable substitution: the driver's own "
+            "debug log prints every statement as sent, substituted values "
+            "included. Avoid DEBUG when a variable holds a secret."
+        )
+
+
 def migrate(ctx) -> List[Migration]:
     logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
+    warn_debug_with_substitution(ctx)
 
     cluster = create_cluster(ctx)
     migrations = do_migrate(cluster, ctx)
@@ -683,6 +751,7 @@ def show_status(ctx) -> int:
 
 def rollback(ctx) -> List[int]:
     logging.basicConfig(level=ctx.log_level, style="{", format="{levelname}:{message}")
+    warn_debug_with_substitution(ctx)
 
     cluster = create_cluster(ctx)
     return do_rollback(cluster, ctx)
