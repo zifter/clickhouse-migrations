@@ -123,8 +123,13 @@ class MigrationStorage:
         name: str,
         version: Optional[int] = None,
         with_down: bool = False,
+        body: str = "",
     ) -> List[Path]:
-        """Scaffold the next migration file (and its down pair) locally."""
+        """Scaffold the next migration file (and its down pair) locally.
+
+        ``body`` is written into the migration file after the header (the down
+        file always starts empty).
+        """
         # Scaffolding never touches ClickHouse, so a fresh checkout should not
         # need a manual mkdir before its very first migration.
         self.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -146,8 +151,12 @@ class MigrationStorage:
 
         today = date.today().isoformat()
         for path in created:
-            title = f"{name} (rollback)" if path.name.endswith(DOWN_SUFFIX) else name
-            path.write_text(f"-- {title}\n-- created: {today}\n", encoding="utf8")
+            is_down = path.name.endswith(DOWN_SUFFIX)
+            title = f"{name} (rollback)" if is_down else name
+            text = f"-- {title}\n-- created: {today}\n"
+            if body and not is_down:
+                text += "\n" + body
+            path.write_text(text, encoding="utf8")
 
         return created
 

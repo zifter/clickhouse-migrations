@@ -36,6 +36,7 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 * **Offline validation** — [`validate`](#validating-migrations) catches bad file names, duplicate versions, unterminated strings and risky statements without a database, also as a [pre-commit hook](#as-a-pre-commit-hook)
 * **Configurable bookkeeping** — [rename the migrations table](#the-migrations-table) or set its engine (`--migrations-table` / `--migrations-table-engine`)
 * **Schema dump** — [`dump`](#dumping-the-schema) prints the live schema as normalised, dependency-ordered SQL, with `--check` for drift detection in CI
+* **Declarative diff** — [`diff`](#generating-a-migration-from-a-schema-file-diff) compares the database with a target `schema.sql` and writes the migration for you to review, refusing loudly what ClickHouse cannot do in place
 * **Safe concurrent runs** — an opt-in [migration lock](#concurrent-runs-and-locking) (`--lock`) so several replicas of a Kubernetes `Job` cannot interleave
 * **Per-environment SQL** — opt-in [`${NAME}` substitution](#variable-substitution) (`--var` / `--substitute-env`) for cluster names, dictionary sources and the like, with checksums taken from the raw file
 * **Naive rollbacks** — optional paired [`{VERSION}_{name}.down.sql`](#rollbacks-down-migrations) files and a `down` subcommand to reverse applied migrations
@@ -237,8 +238,7 @@ Check | Level | What it catches
 `bad-filename` | error | a `*.sql` file not named `{VERSION}_{name}.sql` / `{VERSION}_{name}.down.sql` (integer version, non-empty name)
 `duplicate-version` | error | two migrations (or two `.down.sql` files) with the same version, e.g. `001_a.sql` and `1_b.sql`
 `orphan-down` | error | a `.down.sql` without a matching up-migration
-`empty-file` | error | a file with only whitespace and/or comments (e.g. a scaffold from `new` nobody filled in)
-`empty-statement` | error | a statement with only comments, e.g. a comment after the last `;` — ClickHouse rejects it as an empty query
+`empty-file` | error | a file with only whitespace and/or comments (e.g. a scaffold from `new` nobody filled in). `migrate` would record it as applied without running anything. Comments after the last `;` in a file that has statements are fine: `migrate` skips comment-only chunks
 `unterminated` | error | a string literal, quoted identifier or block comment that is never closed
 `encoding` | error | a file that is not valid UTF-8
 `version-gap` | warning | missing versions between existing ones (e.g. `002` → `005`)
@@ -519,7 +519,7 @@ Statements come in **dependency order** (a view, materialized view or dictionary
 * Secrets are masked by the server in `SHOW CREATE` (`[HIDDEN]`), so dictionaries or engines with passwords / keys will not replay as is.
 * The output follows the server's formatting, which differs between ClickHouse versions: compare dumps taken from the same server version (`--check` in CI against a fixed version). Tested on ClickHouse 25.7.
 * Only tables, views, materialized views and dictionaries are dumped (no users, roles, grants, functions or databases). Dependencies are per-object, so a dependency on an object of another database is not followed.
-* `diff` (turning a schema file into migrations) is not part of this command.
+* To turn a (hand-edited) schema file back into a migration, use [`diff`](#generating-a-migration-from-a-schema-file-diff).
 
 Drift detection in CI (fails the job when the live schema no longer matches the committed `schema.sql`):
 
@@ -541,6 +541,53 @@ jobs:
 ```
 
 From Python: `ClickhouseCluster(...).dump(db_name="mydb", tables=None, keep_replicated_paths=False, include_migrations_table=False)` returns the SQL text.
+
+### Generating a migration from a schema file (diff)
+
+`diff` compares the live database with a target schema file and **writes the next numbered migration for a human to review**. It never applies anything: you read the file, edit it if needed, and run `migrate` as usual.
+
+```bash
+clickhouse-migrations dump --db-name mydb --out schema.sql     # once: commit the current schema
+$EDITOR schema.sql                                             # describe the schema you want
+clickhouse-migrations diff --db-name mydb --to schema.sql --migrations-dir migrations/
+# Created migrations/007_diff.sql
+clickhouse-migrations migrate --db-name mydb --migrations-dir migrations/
+```
+
+**How it works.** `diff` does not parse ClickHouse DDL. It creates a throwaway scratch database (`_chm_diff_<random>`, `ENGINE = Atomic`, on the connected server only), replays the schema file into it, reads both databases back from `system.tables`, `system.columns`, `system.data_skipping_indices` and `SHOW CREATE`, and compares the models. The scratch database is always dropped, also when the file is invalid or on Ctrl-C. So `diff` **needs the `CREATE DATABASE` and `DROP DATABASE` privileges** (and `CREATE TABLE / VIEW / DICTIONARY` inside it) besides read access to the system tables; the target database itself is only read.
+
+The schema file is `dump` output or its hand-written equivalent: only `CREATE [OR REPLACE] TABLE / VIEW / MATERIALIZED VIEW / DICTIONARY` statements with **database-less names** are accepted (anything else, or a `db.name`, is an error before anything is created). `ON CLUSTER` is ignored. `Replicated*MergeTree` / `Shared*MergeTree` tables are created as their local `*MergeTree` family in the scratch database (an argument-less replicated table cannot be created locally), which is enough because engines are compared by family and a switch to or from `Replicated` is refused anyway.
+
+| Change | Generated |
+| --- | --- |
+| New table, view, materialized view, dictionary | the target's `CREATE` (dump-normalised), in dependency order |
+| New column | `ALTER TABLE t ADD COLUMN ... FIRST / AFTER prev` (keeps the position) |
+| Column type, default (`DEFAULT` / `MATERIALIZED` / `ALIAS` / `EPHEMERAL`), codec, comment | `MODIFY COLUMN` / `MODIFY COLUMN ... REMOVE DEFAULT\|CODEC\|...` / `COMMENT COLUMN` |
+| Column order | `MODIFY COLUMN c <type> FIRST / AFTER prev` |
+| New data skipping index | `ADD INDEX ... FIRST / AFTER prev` (existing parts are indexed only after `MATERIALIZE INDEX`) |
+| Table `TTL`, table comment | `MODIFY TTL` / `REMOVE TTL`, `MODIFY COMMENT` |
+| Changed view / dictionary | `CREATE OR REPLACE VIEW` / `CREATE OR REPLACE DICTIONARY` |
+| Changed materialized view `SELECT` | `ALTER TABLE mv MODIFY QUERY ...`, only when nothing else changes (same `TO` table; for a view with an inner table also the same columns and engine) |
+| **Destructive:** object / column / index gone from the file, changed index | `DROP TABLE / VIEW / DICTIONARY`, `DROP COLUMN`, `DROP INDEX` (+ re-`ADD INDEX`) — **commented out** unless `--allow-destructive` |
+
+**Refused** (no SQL is generated; each one is listed in the output, as a warning on stderr and in the header comment of the file, with the reason and what to do instead): a changed engine or engine arguments, `ORDER BY`, `PARTITION BY`, `PRIMARY KEY`, `SAMPLE BY` (these need a table rebuild: new table, `INSERT ... SELECT`, `EXCHANGE TABLES`), a switch to or from `Replicated`, changed `SETTINGS`, projections or constraints, a reordering of indices, an object that changes kind (table ↔ view), a materialized view whose target, engine or columns change, and column changes `diff` does not model (e.g. a column `TTL`). A table with any refused change gets no partial `ALTER`s at all; the rest of the schema is still diffed. **Renames** cannot be told apart from drop + add: they come out as a (commented-out) `DROP` plus an `ADD`/`CREATE`, and the header adds a note suggesting `RENAME COLUMN` / `RENAME TABLE`.
+
+| Flag | Env | Meaning |
+| --- | --- | --- |
+| `--to FILE` | | Target schema file (required) |
+| `--migrations-dir DIR` | `MIGRATIONS_DIR` | Where the file is written; the version is the next free one, as with `new` |
+| `--name NAME` | `DIFF_NAME` | File name slug: `NNN_<name>.sql` (default `diff`) |
+| `--allow-destructive` | `ALLOW_DESTRUCTIVE` | Emit the destructive statements for real instead of commented out |
+| `--dry-run` | `DRY_RUN` | Print the migration to stdout (only the SQL; messages go to stderr) and write nothing |
+| `--db-url`, `--db-host`, `--db-port`, `--db-user`, `--db-password`, `--db-name`, `--driver`, `--secure`, `--log-level`, `--migrations-table` | same as `dump` | Connection; the migrations table and its lock tables are ignored on both sides |
+
+The file starts like any `new` migration (`-- <name>` and `-- created: <date>`), followed by a header comment listing every change, the refusals and notes, then one `;`-terminated statement per change with database-less names, so `migrate` applies it to whatever database it targets (it needs the default `--multi-statement`). Commented-out statements and comment-only files are skipped by `migrate` (a file with nothing but commented-out `DROP`s applies as a no-op).
+
+**Exit codes:** `0` — the migration was written (or printed), or there was nothing to change (`No changes` on stderr, **no file** is created); `1` — at least one change was refused (the file, if any supported change exists, holds only the supported part; if every change was refused no file is created), or any error (unreadable or invalid schema file, missing database, ...); `2` — invalid arguments.
+
+From Python: `ClickhouseCluster(...).diff(schema_sql, db_name="mydb", allow_destructive=False)` returns the migration SQL (`""` when nothing changes); `diff_plan(schema_sql, db_name)` returns the structured result (`changes`, `refusals`, `notes`, `render()`), and `clickhouse_migrations.schema_diff.write_diff_migration(migrations_dir, sql, name="diff")` writes it as the next migration.
+
+**Known limitations:** the file is really created on the server for a moment, so engines with side effects (`Kafka`, `RabbitMQ`, `URL`, remote dictionaries, ...) are instantiated in the scratch database; `diff` compares the connected server only (run `ON CLUSTER` changes yourself: the generated statements have no `ON CLUSTER`, and a new argument-less `Replicated*` table needs `ON CLUSTER` or a `Replicated` database); a column TTL change combined with another change of the same column is not detected; references to other databases are compared as written. Tested on ClickHouse 25.7.
 
 ### In code
 ```python

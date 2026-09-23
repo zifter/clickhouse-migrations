@@ -1,7 +1,8 @@
 import logging
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from clickhouse_driver import Client
@@ -38,6 +39,14 @@ from clickhouse_migrations.migrator import (
     Migrator,
     StatusRow,
 )
+from clickhouse_migrations.schema_diff import (
+    DbObject,
+    SchemaDiff,
+    TargetStatement,
+    build_object,
+    diff_schemas,
+    prepare_target,
+)
 from clickhouse_migrations.schema_dump import (
     INNER_TABLE_PREFIXES,
     LOCK_TABLE,
@@ -53,6 +62,12 @@ from clickhouse_migrations.util import (
     quote_string,
     split_table_reference,
 )
+
+
+def _short_error(exc: BaseException) -> str:
+    """A server error on one line, without the server stack trace."""
+    message = str(exc).split("Stack trace", maxsplit=1)[0]
+    return " ".join(message.split()) or repr(exc)
 
 
 class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
@@ -349,6 +364,142 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             {name: dependencies[name] - {name} for name in selected}
         )
         return render_dump([statements[name] for name in order])
+
+    def diff_plan(self, schema_sql: str, db_name: Optional[str] = None) -> SchemaDiff:
+        """Compare ``db_name`` with the schema file text ``schema_sql``.
+
+        The file (``dump`` output or an equivalent: CREATE statements with
+        database-less names) is replayed into a throwaway scratch database,
+        then both databases are read back from the system tables and compared.
+        The scratch database is always dropped, also on errors and Ctrl-C.
+        Nothing in ``db_name`` is ever changed. Needs the CREATE DATABASE /
+        DROP DATABASE privileges for the scratch database.
+        """
+        db_name = db_name if db_name is not None else self.default_db_name
+        if not db_name:
+            raise MigrationException("A database name is required to diff the schema.")
+
+        prepared = prepare_target(schema_sql)
+        excluded = self._excluded_from_dump(db_name)
+        with self.connection("") as conn:
+            if not conn.query(
+                f"SELECT 1 AS n FROM system.databases WHERE name = {quote_string(db_name)}"
+            ):
+                raise MigrationException(f"Database {db_name!r} does not exist.")
+            live, live_order = self._introspect(conn, db_name, excluded)
+
+        scratch = f"_chm_diff_{uuid.uuid4().hex}"
+        try:
+            with self.connection("") as conn:
+                conn.command(
+                    f"CREATE DATABASE {quote_identifier(scratch)} ENGINE = Atomic"
+                )
+            self._replay_target(scratch, prepared)
+            with self.connection("") as conn:
+                target, target_order = self._introspect(conn, scratch, excluded)
+        finally:
+            self._drop_scratch(scratch)
+
+        prefixes = {statement.name: statement.engine_prefix for statement in prepared}
+        target = {
+            name: obj._replace(engine_prefix=prefixes.get(name, obj.engine_prefix))
+            for name, obj in target.items()
+        }
+        return diff_schemas(live, target, live_order, target_order)
+
+    def diff(
+        self,
+        schema_sql: str,
+        db_name: Optional[str] = None,
+        allow_destructive: bool = False,
+    ) -> str:
+        """The migration SQL that turns ``db_name`` into ``schema_sql`` ("" if equal).
+
+        See ``diff_plan``; refused changes are listed in the header comment
+        only, destructive statements are commented out unless
+        ``allow_destructive``. Write it with ``schema_diff.write_diff_migration``.
+        """
+        return self.diff_plan(schema_sql, db_name).render(allow_destructive)
+
+    def _replay_target(self, scratch: str, prepared: List[TargetStatement]) -> None:
+        with self.connection(scratch) as conn:
+            for number, statement in enumerate(prepared, start=1):
+                try:
+                    conn.command(statement.sql)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    raise MigrationException(
+                        f"The schema file does not apply: statement {number} "
+                        f"({statement.kind} {statement.name}) failed: "
+                        f"{_short_error(exc)}"
+                    ) from exc
+
+    def _drop_scratch(self, scratch: str) -> None:
+        # A fresh connection: the one that failed (or was interrupted) may be
+        # unusable. A failure here must not hide the original error.
+        try:
+            with self.connection("") as conn:
+                conn.command(
+                    f"DROP DATABASE IF EXISTS {quote_identifier(scratch)} SYNC"
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logging.error(
+                "Could not drop the scratch database %s, drop it by hand: %s",
+                scratch,
+                exc,
+            )
+
+    @staticmethod
+    def _rows_by_table(
+        conn: Connection, query: str, names: Set[str]
+    ) -> Dict[str, List[Dict]]:
+        grouped: Dict[str, List[Dict]] = {name: [] for name in names}
+        for row in conn.query(query):
+            grouped.get(row["table"], []).append(row)
+        return grouped
+
+    def _introspect(
+        self, conn: Connection, db_name: str, excluded: Set[str]
+    ) -> Tuple[Dict[str, DbObject], List[str]]:
+        """The models of the objects of ``db_name`` and their dependency order."""
+        where = f"WHERE database = {quote_string(db_name)}"
+        rows = conn.query(
+            f"SELECT * FROM system.tables {where} AND NOT is_temporary ORDER BY name"
+        )
+        known = {row["name"] for row in rows}
+        names = {
+            name
+            for name in known
+            if not name.startswith(INNER_TABLE_PREFIXES) and name not in excluded
+        }
+        columns = self._rows_by_table(
+            conn,
+            "SELECT table, name, position, type, default_kind, default_expression, "
+            f"compression_codec, comment FROM system.columns {where}",
+            names,
+        )
+        indices = self._rows_by_table(
+            conn,
+            "SELECT table, name, expr, type_full, granularity "
+            f"FROM system.data_skipping_indices {where}",
+            names,
+        )
+
+        dependencies = server_dependencies(rows, db_name, names)
+        objects: Dict[str, DbObject] = {}
+        for row in (row for row in rows if row["name"] in names):
+            objects[row["name"]] = build_object(
+                row,
+                self._show_create(conn, db_name, row["name"]),
+                columns[row["name"]],
+                indices[row["name"]],
+                db_name,
+                known,
+            )
+            dependencies[row["name"]] |= objects[row["name"]].references
+        order = sort_by_dependency(
+            {name: deps - {name} for name, deps in dependencies.items()}
+        )
+        return objects, order
 
     @staticmethod
     def _show_create(conn: Connection, db_name: str, name: str) -> str:
