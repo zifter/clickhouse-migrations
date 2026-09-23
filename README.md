@@ -355,6 +355,54 @@ SQL is what the server receives, so:
 
 Keep that in mind before putting passwords into variables; for dictionary sources consider
 [named collections](https://clickhouse.com/docs/en/operations/named-collections) instead.
+### Adopting an existing database
+
+Most databases already have a schema before the tool shows up. Write migrations that describe the existing schema (`clickhouse-migrations dump` gives you a starting point), then mark them as applied **without executing them** using `baseline`:
+
+```bash
+clickhouse-migrations baseline --to 3 --db-name prod --migrations-dir ./migrations --dry-run   # show what would be recorded
+clickhouse-migrations baseline --to 3 --db-name prod --migrations-dir ./migrations
+```
+
+```
+VERSION  STATUS   MD5                               APPLIED AT           HAS DOWN
+1        applied  6172991b15b0852bc895e09b3e91ade4  2024-01-01 12:00:00  no
+2        applied  1a79a4d60de6718e8e5b326e338ae533  2024-01-01 12:00:00  no
+3        applied  0b8a2e3c52b3f6a0b9d0d0a2c1f1a4e7  2024-01-01 12:00:00  no
+4        pending  9c1185a5c5e9fc54612808977ee8f548                       no
+```
+
+* Every local migration with a version `<= --to` is recorded (md5 and script, exactly like `--fake`), nothing is executed. `--to` must be a local migration. A later `migrate` applies only the newer ones.
+* It **refuses to run unless the migrations table is absent or empty** — baselining a database that already has history is always a mistake (use `repair` below instead).
+* It creates the database (unless `--no-create-db-if-not-exists`) and the migrations table the same way `migrate` does, honouring `--cluster-name`, `--migrations-table` and `--migrations-table-engine`.
+* `--dry-run` prints the status the database would have afterwards and writes nothing at all — not even the database or the table.
+* `--format json` prints the same JSON document as `status`; `--lock` works as for `migrate` (never taken with `--dry-run`).
+
+### Recovering from a changed migration
+
+Editing an applied migration (a typo in a comment, reformatting, merging migrations) makes every later run fail with *"Migrations md5 is not equal"* and `status` show `md5-mismatch`. `repair` updates the stored md5 **and** script of exactly those migrations:
+
+```bash
+clickhouse-migrations repair --db-name prod --migrations-dir ./migrations            # report only, exit code 1 if out of sync
+clickhouse-migrations repair --write --db-name prod --migrations-dir ./migrations    # fix every md5-mismatch
+clickhouse-migrations repair --write --version 7 ...                                  # fix only version 7 (repeatable)
+clickhouse-migrations repair --write --prune ...                                      # also delete "unknown" rows
+```
+
+```
+VERSION  STATUS        MD5                               APPLIED AT           HAS DOWN
+7        md5-mismatch  6172991b15b0852bc895e09b3e91ade4  2024-01-01 12:00:00  no
+9        unknown       1a79a4d60de6718e8e5b326e338ae533  2024-01-02 12:00:00  no
+```
+
+* **Without `--write` nothing changes**: it lists the `md5-mismatch` and `unknown` (applied, but no local file) migrations and exits with `1` if there are any, `0` otherwise — handy in CI. There is no interactive prompt.
+* With `--write` the listed rows are fixed and the table shows their state afterwards (`applied`, `pruned`, or `unknown` for a row left alone); the exit code is `0`. The fresh row is inserted first and the stale ones are then deleted with `ALTER TABLE … DELETE … SETTINGS mutations_sync = 2`, which waits for every replica of a `ReplicatedMergeTree` table, so `status` reports `applied` right away. `APPLIED AT` becomes the time of the repair.
+* `unknown` rows are only reported; they are deleted only with `--prune`, which requires `--write`.
+* `--version N` narrows the repair to the given versions; naming a version that is not `md5-mismatch` or `unknown` (in sync, pending or absent) is an error and nothing is changed.
+* `--write`, `--prune` and `--version` deliberately have no environment variables. Both `baseline` and `repair` always look at the whole migrations directory, so they do not accept `--migrations`.
+* `repair` never executes a migration. With `--lock` the lock is taken only with `--write`. `--format json` prints the same JSON document as `status`.
+
+**`repair` or `--fake`?** `migrate --fake` re-records **every** migration in the list, including those that did not change, and cannot remove `unknown` rows. Use `repair` when an applied file changed on purpose; use `baseline` to adopt an existing database; keep `--fake` for marking specific pending migrations as applied (e.g. with `--migrations`).
 
 ### Dumping the schema
 
