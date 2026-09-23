@@ -1,12 +1,13 @@
 import logging
 import re
 from collections import namedtuple
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Mapping, Optional, Set, Tuple
 
 from clickhouse_migrations.connection import Connection
 from clickhouse_migrations.defaults import MIGRATIONS_TABLE, MIGRATIONS_TABLE_ENGINE
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.migration import Migration
+from clickhouse_migrations.substitution import substitute
 from clickhouse_migrations.util import (
     format_table_reference,
     quote_identifier,
@@ -232,7 +233,15 @@ ORDER BY tuple(created_at)"""
         multi_statement: bool,
         fake: bool = False,
         to_version: Optional[int] = None,
+        variables: Optional[Mapping[str, str]] = None,
+        sources: Optional[Mapping[int, str]] = None,
     ) -> List[Migration]:
+        """Apply the pending ``migrations``.
+
+        ``variables`` enables ``${NAME}`` substitution (None: the scripts run
+        byte for byte). ``sources`` maps a version to its file name for error
+        messages. The md5 and the stored script are always the raw text.
+        """
         if to_version is not None and to_version not in {m.version for m in migrations}:
             raise MigrationException(
                 f"Target version {to_version} is not among the local migrations."
@@ -256,21 +265,31 @@ ORDER BY tuple(created_at)"""
         if not migrations_to_process:
             return []
 
+        # Substitute every script up front, so an unset variable in a later
+        # migration fails the run before the first statement executes. A fake
+        # run executes nothing, so it needs no variables.
+        rendered = self._render_scripts(
+            {m.version: m.script for m in migrations_to_process},
+            None if fake else variables,
+            sources,
+            "migration",
+        )
+
         for migration in migrations_to_process:
             logging.info("Execute migration %s", self.format_migration_log(migration))
 
-            statements = self.script_to_statements(migration.script, multi_statement)
+            statements = self._statements(
+                migration.script, rendered[migration.version], multi_statement
+            )
 
             logging.info("Migration contains %s statements to apply", len(statements))
-            for statement in statements:
+            for statement, shown in statements:
                 if fake:
-                    logging.warning(
-                        "Fake mode, statement will be skipped: %s", statement
-                    )
+                    logging.warning("Fake mode, statement will be skipped: %s", shown)
                 elif self._dryrun:
-                    logging.info("Dry run mode, would have executed: %s", statement)
+                    logging.info("Dry run mode, would have executed: %s", shown)
                 else:
-                    self._conn.command(statement)
+                    self._command(statement, shown)
 
             logging.info("Migration applied, need to update schema version table.")
             if fake:
@@ -291,6 +310,59 @@ ORDER BY tuple(created_at)"""
             logging.info("Migration is fully applied.")
 
         return migrations_to_process
+
+    @staticmethod
+    def _render_scripts(
+        scripts: Dict[int, str],
+        variables: Optional[Mapping[str, str]],
+        sources: Optional[Mapping[int, str]],
+        kind: str,
+    ) -> Dict[int, Optional[str]]:
+        """Substituted script per version; None when substitution is off."""
+        if variables is None:
+            return {version: None for version in scripts}
+
+        sources = sources or {}
+        return {
+            version: substitute(
+                script, variables, sources.get(version, f"{kind} version {version}")
+            )
+            for version, script in scripts.items()
+        }
+
+    def _statements(
+        self, raw: str, rendered: Optional[str], multi_statement: bool
+    ) -> List[Tuple[str, str]]:
+        """Pairs of (statement to execute, statement safe to log).
+
+        Substituted values may be secrets, so our own logs only ever show the
+        raw text with its placeholders. When a value changed how the script
+        splits into statements, the raw statements no longer line up and only
+        a description is logged.
+        """
+        raw_statements = self.script_to_statements(raw, multi_statement)
+        if rendered is None:
+            return list(zip(raw_statements, raw_statements))
+
+        statements = self.script_to_statements(rendered, multi_statement)
+        if len(statements) == len(raw_statements):
+            return list(zip(statements, raw_statements))
+
+        return [
+            (
+                statement,
+                f"<statement {index} of {len(statements)} after variable "
+                "substitution, not logged>",
+            )
+            for index, statement in enumerate(statements, start=1)
+        ]
+
+    def _command(self, statement: str, shown: str) -> None:
+        if statement == shown:
+            self._conn.command(statement)
+        else:
+            # Keep substituted values out of the connection's debug log.
+            self._conn.command(statement, log_statement=shown)
 
     def _check_target_not_below_applied(self, to_version: int) -> None:
         applied = [m.version for m in self.query_applied_migrations()]
@@ -320,6 +392,8 @@ ORDER BY tuple(created_at)"""
         steps: int = 1,
         to_version: Optional[int] = None,
         multi_statement: bool = True,
+        variables: Optional[Mapping[str, str]] = None,
+        sources: Optional[Mapping[int, str]] = None,
     ) -> List[int]:
         targets = self._rollback_targets(steps, to_version)
         if not targets:
@@ -335,16 +409,22 @@ ORDER BY tuple(created_at)"""
                 + ", ".join(str(v) for v in missing)
             )
 
+        # Same as missing files: substitute every down script before the first
+        # one runs, so an unset variable never leaves a half rollback behind.
+        rendered = self._render_scripts(
+            {v: down_scripts[v] for v in targets}, variables, sources, "down migration"
+        )
+
         for version in targets:
             logging.info("Rolling back migration version %s", version)
-            statements = self.script_to_statements(
-                down_scripts[version], multi_statement
+            statements = self._statements(
+                down_scripts[version], rendered[version], multi_statement
             )
-            for statement in statements:
+            for statement, shown in statements:
                 if self._dryrun:
-                    logging.info("Dry run mode, would have executed: %s", statement)
+                    logging.info("Dry run mode, would have executed: %s", shown)
                 else:
-                    self._conn.command(statement)
+                    self._command(statement, shown)
 
             # Delete the row only after the down script ran, so a failed down
             # keeps the migration marked as applied. mutations_sync = 2 makes the

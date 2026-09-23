@@ -41,6 +41,7 @@ from clickhouse_migrations.schema_dump import (
     server_dependencies,
     sort_by_dependency,
 )
+from clickhouse_migrations.substitution import resolve_variables
 from clickhouse_migrations.util import (
     format_table_reference,
     quote_identifier,
@@ -377,7 +378,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             )
         return sorted(set(tables))
 
-    def migrate(
+    def migrate(  # pylint: disable=too-many-locals
         self,
         db_name: Optional[str],
         migration_path: Union[Path, str],
@@ -392,7 +393,15 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         lock: bool = LOCK,
         lock_timeout: int = LOCK_TIMEOUT,
         lock_ttl: int = LOCK_TTL,
+        variables: Optional[Dict[str, str]] = None,
+        substitute_env: bool = False,
     ):
+        """Apply the pending migrations of ``migration_path``.
+
+        ``variables`` and/or ``substitute_env`` enable ``${NAME}`` substitution
+        in the migration files (see resolve_variables); without them the files
+        run byte for byte.
+        """
         db_name = db_name if db_name is not None else self.default_db_name
 
         if to_version is not None and explicit_migrations:
@@ -400,7 +409,8 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
                 "to_version and explicit_migrations are mutually exclusive."
             )
 
-        migrations = MigrationStorage(migration_path).migrations(explicit_migrations)
+        storage = MigrationStorage(migration_path)
+        migrations = storage.migrations(explicit_migrations)
 
         return self.apply_migrations(
             db_name,
@@ -415,6 +425,9 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             lock=lock,
             lock_timeout=lock_timeout,
             lock_ttl=lock_ttl,
+            variables=variables,
+            substitute_env=substitute_env,
+            migration_files=storage.migration_filenames(),
         )
 
     def status(
@@ -446,7 +459,7 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         with self.connection(db_name) as conn:
             return self._migrator(conn).migration_status(incoming, down_versions)
 
-    def rollback(
+    def rollback(  # pylint: disable=too-many-locals
         self,
         db_name: Optional[str],
         migration_path: Union[Path, str],
@@ -457,10 +470,14 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         lock: bool = LOCK,
         lock_timeout: int = LOCK_TIMEOUT,
         lock_ttl: int = LOCK_TTL,
+        variables: Optional[Dict[str, str]] = None,
+        substitute_env: bool = False,
     ) -> List[int]:
         db_name = db_name if db_name is not None else self.default_db_name
 
-        down_scripts = MigrationStorage(migration_path).down_scripts()
+        storage = MigrationStorage(migration_path)
+        down_scripts = storage.down_scripts()
+        resolved = resolve_variables(variables, substitute_env)
 
         # Read-only pre-check: if the schema table is missing, nothing has been
         # applied yet, so there is nothing to roll back.
@@ -482,9 +499,11 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
                     steps=steps,
                     to_version=to_version,
                     multi_statement=multi_statement,
+                    variables=resolved,
+                    sources=storage.down_filenames(),
                 )
 
-    def apply_migrations(
+    def apply_migrations(  # pylint: disable=too-many-locals
         self,
         db_name: str,
         migrations: List[Migration],
@@ -498,7 +517,13 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         lock: bool = LOCK,
         lock_timeout: int = LOCK_TIMEOUT,
         lock_ttl: int = LOCK_TTL,
+        variables: Optional[Dict[str, str]] = None,
+        substitute_env: bool = False,
+        migration_files: Optional[Dict[int, str]] = None,
     ) -> List[Migration]:
+        # migration_files (version -> file name) only names files in errors.
+        resolved = resolve_variables(variables, substitute_env)
+
         if create_db_if_no_exists:
             if cluster_name is None:
                 self.create_db(db_name)
@@ -519,7 +544,12 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
                 )
                 migrator.init_schema(cluster_name)
                 return migrator.apply_migration(
-                    migrations, multi_statement, fake=fake, to_version=to_version
+                    migrations,
+                    multi_statement,
+                    fake=fake,
+                    to_version=to_version,
+                    variables=resolved,
+                    sources=migration_files,
                 )
 
     def _lock(
