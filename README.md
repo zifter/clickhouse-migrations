@@ -71,6 +71,32 @@ Scheme | `clickhouse-driver` | `clickhouse-connect`
 
 Note that with `clickhouse-connect` the `clickhouse://` mapping changes the port from 9000 to 8123: an explicit port in the URL is always kept, so `clickhouse://host:9000` would talk HTTP to port 9000. The resolved scheme, host and port (never the password) are logged at `INFO` level. `--secure` upgrades `http`/`clickhouse` URLs to TLS and never downgrades `https://`/`clickhouses://` ones.
 
+### Transport and TLS
+
+These options work the same with both drivers, with `--db-host`/`--db-port` and with `--db-url`, on every subcommand that connects (`migrate`, `status`, `down`, `dump`, `unlock`). Their variables carry a `CLICKHOUSE_` prefix because names like `KEY` or `SETTINGS` are too likely to be set for something else.
+
+CLI flag | Environment variable | `clickhouse-driver` parameter | `clickhouse-connect` parameter
+--- | --- | --- | ---
+`--ca-cert PATH` | `CLICKHOUSE_CA_CERT` | `ca_certs` | `ca_cert`
+`--cert PATH` | `CLICKHOUSE_CERT` | `certfile` | `client_cert`
+`--key PATH` | `CLICKHOUSE_KEY` | `keyfile` | `client_cert_key`
+`--verify` / `--no-verify` (default on) | `CLICKHOUSE_VERIFY` | `verify` | `verify`
+`--connect-timeout SECONDS` | `CLICKHOUSE_CONNECT_TIMEOUT` | `connect_timeout` | `connect_timeout`
+`--query-timeout SECONDS` | `CLICKHOUSE_QUERY_TIMEOUT` | `send_receive_timeout` | `send_receive_timeout`
+`--setting NAME=VALUE` (repeatable) | `CLICKHOUSE_SETTINGS="a=1,b=2"` | `settings` | `settings`
+
+```bash
+clickhouse-migrations migrate --db-url "clickhouses://user:pass@ch.internal:9440/app" \
+  --ca-cert /tls/ca.pem --cert /tls/client.pem --key /tls/client.key \
+  --query-timeout 1800 --setting allow_experimental_json_type=1
+```
+
+- TLS itself is still turned on by `--secure` or a `clickhouses://`/`https://` URL; the certificate options only configure it, and a warning is logged when they are given for a plain connection. `--key` needs `--cert`. `--no-verify` disables certificate (and host name) verification and logs a warning.
+- Unset options keep the driver defaults (both: 10 s to connect, 300 s query timeout). `--query-timeout` is the socket read timeout: over HTTP it bounds the wait for a statement's response; over the native protocol it bounds the silence between two packets, and the server sends progress packets while a query runs, so there it is an inactivity timeout rather than a limit on the total duration. Raise it for long `ALTER ... MATERIALIZE` or `CREATE TABLE ... AS SELECT` migrations.
+- `--setting` values go to the client itself, so they reach **every** statement the tool sends: the migrations, the bookkeeping queries, the lock and `status`/`dump` queries. Values are passed to the server as text and it converts them. An unknown setting fails the run on both drivers (for `clickhouse-driver` the settings are sent as "important"). `--setting` flags win over `CLICKHOUSE_SETTINGS`, which cannot hold a value containing a comma (use the flag). An explicit option also wins over the same parameter in the `--db-url` query string.
+
+**`SET` inside a multi-statement file.** Over the native protocol a file's statements share one session, so `SET x = 1;` at the top applies to the rest of the file. Over HTTP (`clickhouse-connect`) every statement is a separate request: the `SET` only carries over while the HTTP session does, and sessions live on one server, so behind a load balancer or a multi-replica endpoint (ClickHouse Cloud) statement 2 fails with no hint why. Pass the setting with `--setting` (or `settings=` in Python) instead.
+
 ## Migration files
 
 Migration files follow the naming convention `{VERSION}_{name}.sql`, e.g. `001_init.sql`, `002_add_users.sql`. Versions are plain integers applied in ascending order; [`new`](#creating-a-migration) picks the next one for you.
@@ -133,6 +159,7 @@ CLI flag | Environment variable | Default
 `--lock-timeout` | `LOCK_TIMEOUT` | `300`
 `--lock-ttl` | `LOCK_TTL` | `3600`
 `--secure` | `SECURE` | `false`
+`--ca-cert`, `--cert`, `--key`, `--verify`, `--connect-timeout`, `--query-timeout`, `--setting` | `CLICKHOUSE_*` | see [Transport and TLS](#transport-and-tls)
 `--log-level` | `LOG_LEVEL` | `WARNING`
 `--migration-log-format` | `MIGRATION_LOG_FORMAT` | `full`
 `--driver` | `DRIVER` | `clickhouse-driver`
@@ -370,6 +397,7 @@ Parameter | Description | Default
 `lock_timeout` | Seconds to wait for a lock held by another run (`0` fails immediately) | `300`
 `lock_ttl` | Seconds after which a lock is considered stale and may be taken over | `3600`
 `secure` | Use secure (TLS) connection | `False`
+`ca_cert`, `cert`, `key`, `verify`, `connect_timeout`, `query_timeout`, `settings` | Constructor parameters of `ClickhouseCluster`, same meaning as the [transport options](#transport-and-tls) (`settings` is a dict); `None` keeps the driver default. Other keyword arguments still go to `clickhouse_driver.Client` as is (now also with `db_url`), and an explicit parameter wins over a keyword argument for the same driver parameter | `None`
 `migration_log_format` | Migration log format `full` logs the full Migration object, `compact` logs only version and md5 | `full`
 
 ### The migrations table

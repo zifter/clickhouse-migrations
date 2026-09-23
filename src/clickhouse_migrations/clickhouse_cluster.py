@@ -1,10 +1,11 @@
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from clickhouse_driver import Client
+from clickhouse_driver.util.helpers import parse_url
 
 from clickhouse_migrations.connection import (
     CLICKHOUSE_CONNECT,
@@ -13,8 +14,10 @@ from clickhouse_migrations.connection import (
     ClickhouseConnectConnection,
     ClickhouseDriverConnection,
     Connection,
+    TransportOptions,
     import_clickhouse_connect,
     normalize_db_url,
+    transport_kwargs,
 )
 from clickhouse_migrations.defaults import (
     DB_HOST,
@@ -47,7 +50,7 @@ from clickhouse_migrations.util import (
 
 
 class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
-    def __init__(
+    def __init__(  # pylint: disable=too-many-locals
         self,
         db_host: str = DB_HOST,
         db_user: str = DB_USER,
@@ -59,8 +62,25 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         driver: str = CLICKHOUSE_DRIVER,
         migrations_table: str = MIGRATIONS_TABLE,
         migrations_table_engine: Optional[str] = MIGRATIONS_TABLE_ENGINE,
+        ca_cert: Optional[str] = None,
+        cert: Optional[str] = None,
+        key: Optional[str] = None,
+        verify: Optional[bool] = None,
+        connect_timeout: Optional[float] = None,
+        query_timeout: Optional[float] = None,
+        settings: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
+        """Connection parameters of a ClickHouse server or cluster.
+
+        ``ca_cert``, ``cert``, ``key``, ``verify``, ``connect_timeout``,
+        ``query_timeout`` and ``settings`` work the same with both drivers and
+        with ``db_url`` (see ``connection.TRANSPORT_PARAMETERS`` for the driver
+        parameter each one becomes); ``None`` keeps the driver's default.
+        ``settings`` are sent with every statement. Other ``kwargs`` are passed
+        to ``clickhouse_driver.Client`` as is; where both name the same driver
+        parameter, the explicit parameter wins.
+        """
         self.db_url: Optional[str] = None
         self.default_db_name: Optional[str] = db_name
         self.secure: bool = secure
@@ -68,7 +88,12 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         self.migrations_table: str = migrations_table
         self.migrations_table_engine: Optional[str] = migrations_table_engine
         self.connection_kwargs = kwargs
+        self.transport = TransportOptions(
+            ca_cert, cert, key, verify, connect_timeout, query_timeout, settings
+        )
+        self.transport.validate()
         self._parsed_url = None
+        is_tls = secure
 
         if db_url:
             parsed = urlparse(normalize_db_url(db_url, driver, secure))
@@ -79,6 +104,9 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             query = dict(parse_qsl(parsed.query))
             if secure and driver == CLICKHOUSE_DRIVER:
                 query.setdefault("secure", "true")
+            is_tls = parsed.scheme in ("clickhouses", "https") or (
+                query.get("secure", "").lower() in ("1", "true", "yes", "on")
+            )
 
             # Keep the base URL without a database in the path; connection()
             # re-adds the database as a proper path segment so it never lands
@@ -99,6 +127,20 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             self.db_user = db_user
             self.db_password = db_password
 
+        self._warn_about_tls(is_tls)
+
+    def _warn_about_tls(self, is_tls: bool) -> None:
+        if self.transport.verify is False:
+            logging.warning(
+                "TLS certificate verification is disabled (--no-verify): "
+                "the identity of the server is not checked"
+            )
+        if self.transport.has_tls_files() and not is_tls:
+            logging.warning(
+                "--ca-cert/--cert/--key have no effect on a plain connection; "
+                "use --secure or a clickhouses:// or https:// db_url"
+            )
+
     def _resolved_port(self):
         if self.db_port is not None:
             return self.db_port
@@ -108,43 +150,64 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         db_name = db_name if db_name is not None else self.default_db_name
 
         if self.driver == CLICKHOUSE_CONNECT:
-            clickhouse_connect = import_clickhouse_connect()
-            if self._parsed_url is not None:
-                # The scheme is passed as ``interface`` because get_client
-                # ignores the DSN scheme; user, password, host, port and
-                # query settings come from the DSN itself.
-                client = clickhouse_connect.get_client(
-                    dsn=self.db_url,
-                    interface=self._parsed_url.scheme,
-                    database=db_name or None,
-                )
-                return ClickhouseConnectConnection(client)
-            client = clickhouse_connect.get_client(
-                host=self.db_host,
-                port=int(self._resolved_port()),
-                username=self.db_user,
-                password=self.db_password,
-                database=db_name or None,
-                secure=self.secure,
-            )
-            return ClickhouseConnectConnection(client)
+            return ClickhouseConnectConnection(self._connect_client(db_name))
 
         if self._parsed_url is not None:
             parsed = self._parsed_url
             if db_name:
                 parsed = parsed._replace(path="/" + db_name)
-            ch_client = Client.from_url(urlunparse(parsed))
+            host, kwargs = parse_url(urlunparse(parsed))
         else:
-            ch_client = Client(
-                self.db_host,
-                port=self._resolved_port(),
-                user=self.db_user,
-                password=self.db_password,
-                database=db_name,
-                secure=self.secure,
-                **self.connection_kwargs,
+            host = self.db_host
+            kwargs = {
+                "port": self._resolved_port(),
+                "user": self.db_user,
+                "password": self.db_password,
+                "database": db_name,
+                "secure": self.secure,
+            }
+        # URL query < **kwargs < explicit transport options; settings merge.
+        kwargs.update(self.connection_kwargs)
+        transport = transport_kwargs(self.transport, CLICKHOUSE_DRIVER)
+        settings = {**kwargs.get("settings", {}), **transport.pop("settings", {})}
+        kwargs.update(transport)
+        if settings:
+            kwargs["settings"] = settings
+        if self.transport.settings:
+            # Fail on a misspelled setting like HTTP does, instead of the
+            # server silently ignoring it.
+            kwargs.setdefault("settings_is_important", True)
+        return ClickhouseDriverConnection(Client(host, **kwargs))
+
+    def _connect_client(self, db_name: Optional[str]):
+        clickhouse_connect = import_clickhouse_connect()
+        transport = transport_kwargs(self.transport, CLICKHOUSE_CONNECT)
+        if self._parsed_url is not None:
+            # get_client lets DSN query parameters override its keyword
+            # arguments, so the explicit options are removed from the DSN.
+            query = [
+                (name, value)
+                for name, value in parse_qsl(self._parsed_url.query)
+                if name not in transport
+            ]
+            # The scheme is passed as ``interface`` because get_client
+            # ignores the DSN scheme; user, password, host, port and
+            # query settings come from the DSN itself.
+            return clickhouse_connect.get_client(
+                dsn=urlunparse(self._parsed_url._replace(query=urlencode(query))),
+                interface=self._parsed_url.scheme,
+                database=db_name or None,
+                **transport,
             )
-        return ClickhouseDriverConnection(ch_client)
+        return clickhouse_connect.get_client(
+            host=self.db_host,
+            port=int(self._resolved_port()),
+            username=self.db_user,
+            password=self.db_password,
+            database=db_name or None,
+            secure=self.secure,
+            **transport,
+        )
 
     def _migrator(
         self,

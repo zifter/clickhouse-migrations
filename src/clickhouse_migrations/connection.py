@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Any, Dict, List, NamedTuple, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from clickhouse_migrations.exceptions import MigrationException
@@ -64,6 +64,81 @@ def normalize_db_url(url: str, driver: str, secure: bool = False) -> str:
     return urlunparse(
         parsed._replace(scheme="https" if is_tls else "http", query=urlencode(query))
     )
+
+
+class TransportOptions(NamedTuple):
+    """TLS, timeout and ClickHouse settings options, independent of the driver.
+
+    ``None`` (and an empty ``settings``) leaves the driver's own default in
+    place. ``transport_kwargs`` translates them into one driver's parameters.
+    """
+
+    ca_cert: Optional[str] = None
+    cert: Optional[str] = None
+    key: Optional[str] = None
+    verify: Optional[bool] = None
+    connect_timeout: Optional[float] = None
+    query_timeout: Optional[float] = None
+    settings: Optional[Dict[str, Any]] = None
+
+    def has_tls_files(self) -> bool:
+        return any((self.ca_cert, self.cert, self.key))
+
+    def validate(self) -> None:
+        if self.key and not self.cert:
+            raise MigrationException(
+                "A client key (--key) needs its client certificate (--cert)."
+            )
+        for name in ("connect_timeout", "query_timeout"):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise MigrationException(
+                    f"{name} must be a positive number of seconds, got {value!r}."
+                )
+
+
+# The driver parameter each TransportOptions field is passed as. Both drivers
+# support every option; only the names differ. query_timeout is the socket
+# read timeout of both drivers: over HTTP it bounds the wait for the response,
+# over the native protocol the wait between two packets from the server.
+TRANSPORT_PARAMETERS = {
+    CLICKHOUSE_DRIVER: {
+        "ca_cert": "ca_certs",
+        "cert": "certfile",
+        "key": "keyfile",
+        "verify": "verify",
+        "connect_timeout": "connect_timeout",
+        "query_timeout": "send_receive_timeout",
+        "settings": "settings",
+    },
+    CLICKHOUSE_CONNECT: {
+        "ca_cert": "ca_cert",
+        "cert": "client_cert",
+        "key": "client_cert_key",
+        "verify": "verify",
+        "connect_timeout": "connect_timeout",
+        "query_timeout": "send_receive_timeout",
+        "settings": "settings",
+    },
+}
+
+
+def transport_kwargs(options: TransportOptions, driver: str) -> Dict[str, Any]:
+    """The client keyword arguments of ``driver`` for the options that are set.
+
+    Settings go to the client itself (``settings=`` of ``clickhouse_driver.Client``
+    and of ``clickhouse_connect.get_client``), so every statement sent over the
+    connection carries them.
+    """
+    parameters = TRANSPORT_PARAMETERS[driver]
+    kwargs = {
+        parameters[name]: value
+        for name, value in options._asdict().items()
+        if value is not None and name != "settings"
+    }
+    if options.settings:
+        kwargs["settings"] = dict(options.settings)
+    return kwargs
 
 
 def import_clickhouse_connect():
