@@ -6,11 +6,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - .github/workflows/**
-      - src/**
-      - dev/**
-      - tox.ini
 
 jobs:
   test:
