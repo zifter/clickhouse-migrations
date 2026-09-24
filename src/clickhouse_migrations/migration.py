@@ -180,7 +180,11 @@ class MigrationStorage:
             migration = Migration(
                 version=version_number,
                 script=str(full_path.read_text(encoding="utf8")),
-                md5=hashlib.md5(full_path.read_bytes()).hexdigest(),
+                # Change detection, not security: FIPS-mode builds of Python
+                # refuse plain md5() and would fail to read the directory.
+                md5=hashlib.md5(
+                    full_path.read_bytes(), usedforsecurity=False
+                ).hexdigest(),
             )
 
             if (

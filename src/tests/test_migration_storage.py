@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from clickhouse_migrations.exceptions import MigrationException
@@ -15,6 +17,26 @@ def test_valid_migrations_are_sorted_by_version(tmp_path):
     migrations = MigrationStorage(tmp_path).migrations()
 
     assert [m.version for m in migrations] == [1, 2]
+
+
+def test_migration_checksum_does_not_use_md5_for_security(tmp_path, monkeypatch):
+    # FIPS-mode Python rejects md5() unless usedforsecurity=False is passed.
+    migration_path = tmp_path / "001_first.sql"
+    migration_path.write_text("SELECT 1;", encoding="utf8")
+    original_md5 = hashlib.md5
+    calls = []
+
+    def fips_md5(data, **kwargs):
+        calls.append(kwargs)
+        return original_md5(data, **kwargs)
+
+    monkeypatch.setattr(hashlib, "md5", fips_md5)
+
+    migration = MigrationStorage(tmp_path).migrations()[0]
+
+    assert calls == [{"usedforsecurity": False}]
+    # Same digest as before, so checksums already stored stay valid.
+    assert migration.md5 == original_md5(b"SELECT 1;").hexdigest()
 
 
 def test_missing_directory_raises_clear_error(tmp_path):
