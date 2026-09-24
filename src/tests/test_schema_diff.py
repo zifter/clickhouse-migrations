@@ -2,6 +2,7 @@
 
 import pytest
 
+from clickhouse_migrations import schema_diff
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.schema_diff import (
     KIND_DICTIONARY,
@@ -779,3 +780,23 @@ def test_write_diff_migration(tmp_path):
     assert lines[0] == "-- add stuff"
     assert lines[1].startswith("-- created: ")
     assert lines[2:] == ["", "SELECT 1;"]
+
+
+# --- defensive helpers -----------------------------------------------------
+# pylint: disable=protected-access
+
+
+def test_engine_clause_is_empty_without_an_engine():
+    assert schema_diff._engine_clause("CREATE VIEW v AS SELECT 1") == ""
+
+
+def test_restore_prefix_leaves_statements_without_an_engine_alone():
+    text = "CREATE VIEW v AS SELECT 1"
+
+    assert schema_diff._restore_prefix(text, "Replicated") == text
+
+
+def test_without_column_list_keeps_a_header_that_has_none():
+    header = "CREATE MATERIALIZED VIEW mv TO t"
+
+    assert schema_diff._without_column_list(header) == header
