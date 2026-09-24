@@ -1,12 +1,16 @@
 # Changelog
 
-## [Unreleased](https://github.com/zifter/clickhouse-migrations/compare/v0.14.0...main)
+## [v0.15.0](https://github.com/zifter/clickhouse-migrations/tree/v0.15.0) (2026-09-25)
+
+[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.14.0...v0.15.0)
 
 **What's Changed:**
-- Raise the minimum driver versions to what the code actually needs: `clickhouse-driver>=0.2.9` (was `>=0.2.2`; older versions have no `clickhouse_driver.util.helpers.parse_url` and fail on import) and `clickhouse-connect>=0.7.9` (was `>=0.7`; older versions break on a `--db-url` with client parameters in the query string such as `?connect_timeout=5`). Upgrading may make pip upgrade an older installed driver. A new CI job (`tox -e py39-mindeps`) runs the whole suite against these minimums. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/107. Closes #102.
 - Refresh the migration lock while it is held: with `--lock`, a daemon heartbeat thread moves `acquired_at` forward every `--lock-ttl / 3` seconds (at least every second) over its own connection, so a run longer than `--lock-ttl` no longer looks stale and can no longer be taken over while it is still running; `--lock-ttl` now only matters for runs that died. The refresh is a compare-and-set on our own row (`ALTER TABLE … UPDATE … WHERE owner = <ours> SETTINGS keeper_map_strict_mode = 1`), a failed refresh is retried at the next tick, and a lock found gone or taken over is logged as an error (the migration continues). The heartbeat stops before the lock is released. Nothing changes without `--lock`. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/108. Closes #100.
+- Publish releases to PyPI with [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (`pypa/gh-action-pypi-publish`, short-lived OIDC tokens) instead of a stored PyPI username and password. Done by @UsmanGhias in https://github.com/zifter/clickhouse-migrations/pull/105. Closes #103.
 - Internal: split the CLI into a `cli` package (one module per subcommand plus shared option, rendering and dispatch modules); `clickhouse_migrations.command_line` keeps working: its public functions and constants are still importable from it, the `clickhouse-migrations` console script is unchanged and so is the command line itself. Code that patched `command_line` attributes in tests should patch the `cli` module that uses them (e.g. `clickhouse_migrations.cli.common.create_cluster`). Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/109. Closes #101.
 
+**Behaviour changes:**
+- Raise the minimum driver versions to what the code actually needs: `clickhouse-driver>=0.2.9` (was `>=0.2.2`; older versions have no `clickhouse_driver.util.helpers.parse_url` and fail on import) and `clickhouse-connect>=0.7.9` (was `>=0.7`; older versions break on a `--db-url` with client parameters in the query string such as `?connect_timeout=5`). Upgrading may make pip upgrade an older installed driver. A new CI job (`tox -e py39-mindeps`) runs the whole suite against these minimums. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/107. Closes #102.
 
 
 ## [v0.14.0](https://github.com/zifter/clickhouse-migrations/tree/v0.14.0) (2026-09-24)
