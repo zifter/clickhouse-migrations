@@ -25,6 +25,8 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 
 📖 **Background:** [Managing ClickHouse migrations in production](https://medium.com/@zifter/managing-clickhouse-migrations-in-production-cluster-support-and-multi-statement-files-07d46c1de275) — why this tool exists, cluster support, and multi-statement migration files.
 
+📖 **What's new in 0.14:** [Part 2: locks, schema dump and diff, offline validation](https://medium.com/@zifter/clickhouse-migrations-in-production-part-2-locks-schema-diff-and-the-questions-users-actually-203f55f10bae) — the problems 0.14 solves, with a command for each.
+
 ## Commands
 
 Command | What it does | Talks to ClickHouse
