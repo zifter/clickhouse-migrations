@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased](https://github.com/zifter/clickhouse-migrations/compare/v0.14.0...main)
+
+**What's Changed:**
+- Raise the minimum driver versions to what the code actually needs: `clickhouse-driver>=0.2.9` (was `>=0.2.2`; older versions have no `clickhouse_driver.util.helpers.parse_url` and fail on import) and `clickhouse-connect>=0.7.9` (was `>=0.7`; older versions break on a `--db-url` with client parameters in the query string such as `?connect_timeout=5`). Upgrading may make pip upgrade an older installed driver. A new CI job (`tox -e py39-mindeps`) runs the whole suite against these minimums. Done by @zifter in PR_URL. Closes #102.
+
 ## [v0.14.0](https://github.com/zifter/clickhouse-migrations/tree/v0.14.0) (2026-09-24)
 
 [Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.13.0...v0.14.0)
