@@ -16,7 +16,6 @@ from clickhouse_migrations.validate import (
     CHECK_DESTRUCTIVE,
     CHECK_DUPLICATE_VERSION,
     CHECK_EMPTY_FILE,
-    CHECK_EMPTY_STATEMENT,
     CHECK_ENCODING,
     CHECK_MISSING_DOWN,
     CHECK_ON_CLUSTER,
@@ -191,10 +190,9 @@ def test_empty_file():
     ]
 
 
-def test_empty_statement():
-    assert _summary(_findings("empty_statement")) == [
-        ("001_trailing_comment.sql", 2, LEVEL_ERROR, CHECK_EMPTY_STATEMENT),
-    ]
+def test_trailing_comment_is_fine():
+    # migrate skips comment-only chunks, so a note after the last ";" is valid.
+    assert not _findings("empty_statement")
 
 
 def test_unterminated():

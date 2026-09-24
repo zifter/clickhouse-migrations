@@ -26,7 +26,6 @@ CHECK_BAD_FILENAME = "bad-filename"
 CHECK_DUPLICATE_VERSION = "duplicate-version"
 CHECK_ORPHAN_DOWN = "orphan-down"
 CHECK_EMPTY_FILE = "empty-file"
-CHECK_EMPTY_STATEMENT = "empty-statement"
 CHECK_UNTERMINATED = "unterminated"
 CHECK_ENCODING = "encoding"
 CHECK_VERSION_GAP = "version-gap"
@@ -174,19 +173,6 @@ def _check_script(migration: _File, script: str) -> List[Finding]:
     findings: List[Finding] = []
     for tokens, code in zip(statements, codes):
         line = _statement_line(script, tokens)
-        if not code.strip():
-            findings.append(
-                Finding(
-                    name,
-                    line,
-                    LEVEL_ERROR,
-                    CHECK_EMPTY_STATEMENT,
-                    "statement has only comments, which ClickHouse rejects as an "
-                    "empty query (move the comment before a statement)",
-                )
-            )
-            continue
-
         destructive = [] if migration.is_down else destructive_operations(code)
         if destructive:
             findings.append(

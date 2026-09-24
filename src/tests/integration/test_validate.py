@@ -15,7 +15,6 @@ from clickhouse_migrations.migration import DOWN_SUFFIX, MigrationStorage
 from clickhouse_migrations.migrator import STATUS_PENDING, split_statement_tokens
 from clickhouse_migrations.validate import (
     CHECK_EMPTY_FILE,
-    CHECK_EMPTY_STATEMENT,
     CHECK_UNTERMINATED,
     LEVEL_ERROR,
     validate_exit_code,
@@ -93,9 +92,6 @@ _SERVER_REJECTS = [
     ("unterminated", "003_double_quote.sql", CHECK_UNTERMINATED),
     ("unterminated", "004_block_comment.sql", CHECK_UNTERMINATED),
     ("unterminated", "005_escaped_quote.sql", CHECK_UNTERMINATED),
-    ("empty_statement", "001_trailing_comment.sql", CHECK_EMPTY_STATEMENT),
-    ("empty_file", "003_scaffold_only.sql", CHECK_EMPTY_FILE),
-    ("empty_file", "004_block_comment_only.sql", CHECK_EMPTY_FILE),
 ]
 
 
@@ -115,3 +111,23 @@ def test_content_errors_are_rejected_by_the_server(
 
     rows = cluster.status("pytest", storage_dir)
     assert [(r.version, r.state) for r in rows] == [(1, STATUS_PENDING)]
+
+
+@pytest.mark.parametrize(
+    "name", ["003_scaffold_only.sql", "004_block_comment_only.sql"]
+)
+def test_empty_file_is_flagged_although_migrate_applies_it(
+    cluster: ClickhouseCluster, tmp_path, name
+):
+    # migrate skips comment-only chunks, so an empty file "applies" as a no-op;
+    # validate still flags it because it is almost always an unfilled scaffold.
+    storage_dir = tmp_path / "migrations"
+    storage_dir.mkdir()
+    shutil.copy(FIXTURES / "empty_file" / name, storage_dir / "001_m.sql")
+
+    findings = validate_migrations(storage_dir).findings
+    assert [(f.level, f.check) for f in findings] == [(LEVEL_ERROR, CHECK_EMPTY_FILE)]
+
+    cluster.migrate("pytest", storage_dir)
+    rows = cluster.status("pytest", storage_dir)
+    assert [(r.version, r.state) for r in rows] == [(1, "applied")]

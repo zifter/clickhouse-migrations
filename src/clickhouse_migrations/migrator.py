@@ -74,14 +74,17 @@ StatementToken = namedtuple("StatementToken", ["kind", "text", "offset"])
 def split_statement_tokens(script: str) -> List[List[StatementToken]]:
     """The tokens of every statement, split exactly like script_to_statements.
 
-    The ";" delimiters are dropped and blank statements are skipped, so
-    statement i here is statement i of script_to_statements(script, True).
+    The ";" delimiters are dropped, and chunks with nothing but whitespace
+    and comments (a commented-out statement at the end of a file, a note
+    after the last ";") are skipped: the server would reject them as an
+    "Empty query". Statement i here is statement i of
+    script_to_statements(script, True).
     """
     statements: List[List[StatementToken]] = []
     current: List[StatementToken] = []
     for match in _STATEMENT_TOKEN_RE.finditer(script):
         if match.lastgroup == "semicolon":
-            if "".join(token.text for token in current).strip():
+            if _has_code(current):
                 statements.append(current)
             current = []
         else:
@@ -89,10 +92,17 @@ def split_statement_tokens(script: str) -> List[List[StatementToken]]:
                 StatementToken(match.lastgroup, match.group(), match.start())
             )
 
-    if "".join(token.text for token in current).strip():
+    if _has_code(current):
         statements.append(current)
 
     return statements
+
+
+def _has_code(tokens: List[StatementToken]) -> bool:
+    return any(
+        token.kind not in ("line_comment", "block_comment") and token.text.strip()
+        for token in tokens
+    )
 
 
 def find_unterminated_token(script: str) -> Optional[StatementToken]:
