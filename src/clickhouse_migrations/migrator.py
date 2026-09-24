@@ -60,6 +60,58 @@ _STATEMENT_TOKEN_RE = re.compile(
     re.VERBOSE | re.DOTALL,
 )
 
+# A quoted token whose closing quote is really escaped: the tokenizer backtracks
+# over "\\" to close 'abc\' , while ClickHouse keeps reading the string.
+_STRICT_QUOTED_RE = {
+    "single": re.compile(r"'(?:\\.|''|[^'\\])*'", re.DOTALL),
+    "double": re.compile(r'"(?:\\.|""|[^"\\])*"', re.DOTALL),
+}
+
+# One token of a script: its _STATEMENT_TOKEN_RE group name, text and offset.
+StatementToken = namedtuple("StatementToken", ["kind", "text", "offset"])
+
+
+def split_statement_tokens(script: str) -> List[List[StatementToken]]:
+    """The tokens of every statement, split exactly like script_to_statements.
+
+    The ";" delimiters are dropped and blank statements are skipped, so
+    statement i here is statement i of script_to_statements(script, True).
+    """
+    statements: List[List[StatementToken]] = []
+    current: List[StatementToken] = []
+    for match in _STATEMENT_TOKEN_RE.finditer(script):
+        if match.lastgroup == "semicolon":
+            if "".join(token.text for token in current).strip():
+                statements.append(current)
+            current = []
+        else:
+            current.append(
+                StatementToken(match.lastgroup, match.group(), match.start())
+            )
+
+    if "".join(token.text for token in current).strip():
+        statements.append(current)
+
+    return statements
+
+
+def find_unterminated_token(script: str) -> Optional[StatementToken]:
+    """The first string, quoted identifier or block comment that never closes.
+
+    The splitter does not fail on those: it falls back to a one-character
+    "other" token and keeps going, so this reports where it gave up.
+    """
+    for match in _STATEMENT_TOKEN_RE.finditer(script):
+        kind, text = match.lastgroup, match.group()
+        if kind == "other" and (
+            text in ("'", '"', "`") or script.startswith("/*", match.start())
+        ):
+            return StatementToken(kind, text, match.start())
+        if kind in _STRICT_QUOTED_RE and not _STRICT_QUOTED_RE[kind].fullmatch(text):
+            return StatementToken(kind, text, match.start())
+
+    return None
+
 
 class Migrator:
     def __init__(
@@ -627,19 +679,7 @@ ORDER BY tuple(created_at)"""
         if not multi_statement:
             return [script.strip()]
 
-        statements: List[str] = []
-        current: List[str] = []
-        for match in _STATEMENT_TOKEN_RE.finditer(script):
-            if match.lastgroup == "semicolon":
-                statement = "".join(current).strip()
-                if statement:
-                    statements.append(statement + ";")
-                current = []
-            else:
-                current.append(match.group())
-
-        statement = "".join(current).strip()
-        if statement:
-            statements.append(statement + ";")
-
-        return statements
+        return [
+            "".join(token.text for token in tokens).strip() + ";"
+            for tokens in split_statement_tokens(script)
+        ]

@@ -1,0 +1,2 @@
+-- ON CLUSTER c
+CREATE TABLE d (id UInt32, s String DEFAULT 'ON CLUSTER') ENGINE = MergeTree() ORDER BY id;

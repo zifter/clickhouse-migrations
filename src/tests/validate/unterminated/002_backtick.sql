@@ -1,0 +1,3 @@
+SELECT 1;
+
+CREATE TABLE `a (id UInt32) ENGINE = Memory;

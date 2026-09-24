@@ -33,6 +33,7 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 * **Two drivers** — native `clickhouse-driver` (TCP) or official `clickhouse-connect` (HTTP)
 * **Inspect before you apply** — [`status`](#migration-status) and `--dry-run` show applied vs pending migrations without touching data
 * **Scaffolding** — [`new`](#creating-a-migration) creates the next migration file for you, offline
+* **Offline validation** — [`validate`](#validating-migrations) catches bad file names, duplicate versions, unterminated strings and risky statements without a database, also as a [pre-commit hook](#as-a-pre-commit-hook)
 * **Configurable bookkeeping** — [rename the migrations table](#the-migrations-table) or set its engine (`--migrations-table` / `--migrations-table-engine`)
 * **Schema dump** — [`dump`](#dumping-the-schema) prints the live schema as normalised, dependency-ordered SQL, with `--check` for drift detection in CI
 * **Safe concurrent runs** — an opt-in [migration lock](#concurrent-runs-and-locking) (`--lock`) so several replicas of a Kubernetes `Job` cannot interleave
@@ -211,6 +212,77 @@ CLI flag | Environment variable | Default
 `--version` | — | *(next available)*
 
 This subcommand is purely local: it **never connects to ClickHouse** and therefore takes none of the `--db-*` options. The migrations directory is created if it does not exist. A version is considered taken if either the migration or its `.down.sql` file already uses it.
+
+### Validating migrations
+
+Catch mistakes in the migrations directory before they reach a database, e.g. in CI or a pre-commit hook:
+
+```bash
+clickhouse-migrations validate --migrations-dir ./migrations
+```
+
+```
+FILE                     LEVEL    CHECK         MESSAGE
+003_add_users.sql:4      error    unterminated  string literal is never closed: the statement splitter reaches the end of the file inside it
+005_drop_legacy.sql:1    warning  destructive   destructive statement (DROP TABLE)
+005_drop_legacy.sql      warning  version-gap   version 4 is missing before this file
+
+1 error(s), 2 warning(s) in 5 migration file(s) in migrations.
+```
+
+Like `new`, it is purely local: it **never connects to ClickHouse** and takes none of the `--db-*` options. Statements are split with the same tokenizer `migrate` uses (in the default `--multi-statement` mode), so keywords inside strings, quoted identifiers and comments never count. Only `*.sql` files are checked; anything else in the directory (`README.md`, …) is ignored. Files are checked **raw**, before any [`${NAME}` substitution](#variable-substitution): a placeholder has no quotes or `;` of its own, so it never changes how a file is split (`ON CLUSTER ${CLUSTER_NAME}` counts as `ON CLUSTER`), but `validate` cannot see what a substituted value adds; placeholders themselves are checked by `migrate`/`down`. A missing directory is an error (exit code `1`).
+
+Check | Level | What it catches
+------|-------|----------------
+`bad-filename` | error | a `*.sql` file not named `{VERSION}_{name}.sql` / `{VERSION}_{name}.down.sql` (integer version, non-empty name)
+`duplicate-version` | error | two migrations (or two `.down.sql` files) with the same version, e.g. `001_a.sql` and `1_b.sql`
+`orphan-down` | error | a `.down.sql` without a matching up-migration
+`empty-file` | error | a file with only whitespace and/or comments (e.g. a scaffold from `new` nobody filled in)
+`empty-statement` | error | a statement with only comments, e.g. a comment after the last `;` — ClickHouse rejects it as an empty query
+`unterminated` | error | a string literal, quoted identifier or block comment that is never closed
+`encoding` | error | a file that is not valid UTF-8
+`version-gap` | warning | missing versions between existing ones (e.g. `002` → `005`)
+`destructive` | warning | `DROP TABLE/DATABASE/DICTIONARY/VIEW`, `TRUNCATE`, `ALTER … DELETE`, `ALTER … UPDATE`, `DROP COLUMN`, `DELETE FROM` — not wrong, worth a second look in review. Never reported for `.down.sql` files, which are expected to be destructive
+`missing-down` | warning (error with `--require-down`) | a migration without a paired `.down.sql`; without `--require-down` only reported once the directory uses `.down.sql` files at all
+`standalone-set` | warning | a `SET …` statement in a multi-statement file: it does not carry over to the next statement with `clickhouse-connect`, use a `SETTINGS` clause instead
+`on-cluster-mismatch` | warning | `ON CLUSTER` used by some DDL migrations but not by others; the minority is reported (files without DDL, e.g. only `INSERT`s, are not counted)
+
+Option | Default | Meaning
+-------|---------|--------
+`--dir` (alias `--migrations-dir`) | `MIGRATIONS_DIR` or `./migrations` | directory to check
+`--strict` | `false` | exit with code `1` on warnings too
+`--require-down` | `false` | report a missing `.down.sql` as an error
+`--format {table,json}` | `table` | `json` prints only a JSON document to stdout
+
+Exit code: `1` if there is any error (or any warning with `--strict`), otherwise `0`. `migrate` does not run these checks itself. The JSON document has stable keys, `line` is `null` for findings about a whole file:
+
+```json
+{
+  "migrations_dir": "migrations",
+  "files": 5,
+  "errors": 1,
+  "warnings": 0,
+  "findings": [
+    {"file": "003_add_users.sql", "line": 4, "level": "error", "check": "unterminated", "message": "string literal is never closed: ..."}
+  ]
+}
+```
+
+#### As a pre-commit hook
+
+```yaml
+- repo: https://github.com/zifter/clickhouse-migrations
+  rev: v0.14.0
+  hooks:
+    - id: clickhouse-migrations-validate
+```
+
+The hook runs whenever a `.sql` file changes and always validates the whole directory (duplicates, gaps and down pairs need all files). It checks `migrations/` by default; point it elsewhere or add flags with `args`, which replaces the default:
+
+```yaml
+    - id: clickhouse-migrations-validate
+      args: [--migrations-dir, db/migrations, --strict]
+```
 
 ### Migration status
 
