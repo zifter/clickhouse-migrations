@@ -25,6 +25,22 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 
 📖 **Background:** [Managing ClickHouse migrations in production](https://medium.com/@zifter/managing-clickhouse-migrations-in-production-cluster-support-and-multi-statement-files-07d46c1de275) — why this tool exists, cluster support, and multi-statement migration files.
 
+## Commands
+
+Command | What it does | Talks to ClickHouse
+--------|--------------|--------------------
+`migrate` (default) | Apply pending migrations; [`--to VERSION`](#migrating-up-to-a-version), `--dry-run`, `--fake` | yes
+[`status`](#migration-status) | Applied / pending / changed / unknown migrations; `--strict`, `--format json` for CI | read-only
+[`down`](#rollbacks-down-migrations) | Run hand-written `.down.sql` rollbacks | yes
+[`new`](#creating-a-migration) | Create the next numbered migration file | no
+[`validate`](#validating-migrations) | Check the migrations directory offline; also a pre-commit hook | no
+[`dump`](#dumping-the-schema) | Print the live schema as portable SQL; `--check` for drift | read-only
+[`diff`](#generating-a-migration-from-a-schema-file-diff) | Generate a migration from a target `schema.sql` | uses a scratch database
+[`baseline`](#adopting-an-existing-database) | Adopt an existing database: mark migrations as applied | yes
+[`repair`](#recovering-from-a-changed-migration) | Fix the stored checksums of edited applied migrations | yes
+[`unlock`](#if-a-run-dies-while-holding-the-lock) | Force-release a migration lock left by a dead run | yes
+`version` | Print the version | no
+
 ## Features
 * **Multi-statement migrations** — more than one query per `.sql` file
 * **Cluster-aware** — keeps migration state consistent across all cluster nodes
@@ -40,15 +56,26 @@ clickhouse-migrations --db-host localhost --db-name mydb --migrations-dir ./migr
 * **Safe concurrent runs** — an opt-in [migration lock](#concurrent-runs-and-locking) (`--lock`) so several replicas of a Kubernetes `Job` cannot interleave
 * **Per-environment SQL** — opt-in [`${NAME}` substitution](#variable-substitution) (`--var` / `--substitute-env`) for cluster names, dictionary sources and the like, with checksums taken from the raw file
 * **Naive rollbacks** — optional paired [`{VERSION}_{name}.down.sql`](#rollbacks-down-migrations) files and a `down` subcommand to reverse applied migrations
+* **Staged rollouts** — [`migrate --to VERSION`](#migrating-up-to-a-version) stops at a target version
+* **Operational escapes** — [`baseline`](#adopting-an-existing-database) adopts a database that already has a schema, [`repair`](#recovering-from-a-changed-migration) fixes checksums after a deliberate edit
+* **TLS and transport options** — [CA / client certificates, timeouts and ClickHouse settings](#transport-and-tls) for both drivers, and a single [`--db-url`](#url-schemes) for ClickHouse Cloud
 
 ## Known alternatives
+
 This package originally forked from [clickhouse-migrator](https://github.com/delium/clickhouse-migrator).
 
-Package | Differences
--------|---------
-[clickhouse-migrator](https://github.com/delium/clickhouse-migrator) | Doesn't support multistatement in a single file , to heavy because of pandas, looks like abandoned
-[django-clickhouse](https://github.com/carrotquest/django-clickhouse) | Need django
-[clickhouse-migrate](https://github.com/trushad0w/clickhouse-migrate) | Doesn't support multistatement
+Tool | Language | Notes
+-----|----------|------
+[golang-migrate](https://github.com/golang-migrate/migrate) | Go | General-purpose migration runner with a ClickHouse driver (configurable migrations table and engine, `ON CLUSTER` via `x-cluster-name`); up/down files, no schema dump or diff
+[goose](https://github.com/pressly/goose), [dbmate](https://github.com/amacneil/dbmate) | Go | General-purpose runners that support ClickHouse among many databases
+[Atlas](https://atlasgo.io/guides/clickhouse) | Go | Declarative schema management; ClickHouse support is part of the paid plan
+[houseplant](https://github.com/juneHQ/houseplant) | Python | YAML-based migrations for ClickHouse
+[clickhouse-migrator](https://github.com/delium/clickhouse-migrator) | Python | Doesn't support multistatement in a single file, too heavy because of pandas, looks like abandoned
+[django-clickhouse](https://github.com/carrotquest/django-clickhouse) | Python | Needs Django
+[clickhouse-migrate](https://github.com/trushad0w/clickhouse-migrate) | Python | Doesn't support multistatement
+[clickhouse-migrations (Node)](https://github.com/VVVi/clickhouse-migrations) | Node.js | SQL file migrations with `${VAR}` substitution and TLS options
+
+This tool stays SQL-file based and Python-native, and adds ClickHouse-specific tooling on top: cluster-aware bookkeeping, `dump`/`diff`, an opt-in Keeper-backed lock, offline `validate`.
 
 ## Installation
 
@@ -61,44 +88,6 @@ pip install 'clickhouse-migrations[connect]'
 ```
 
 With `clickhouse-connect` the default port is `8123` (HTTP). `--db-url` works with both drivers (see [URL schemes](#url-schemes)).
-
-### URL schemes
-
-`--db-url` / `DB_URL` accepts a single URL such as `https://user:pass@host:8443/db`, which is how ClickHouse Cloud hands out credentials. The URL wins over `--db-host`/`--db-port`/`--db-user`/`--db-password`. The scheme is normalised per driver:
-
-Scheme | `clickhouse-driver` | `clickhouse-connect`
---- | --- | ---
-`clickhouse://` | native TCP, default port 9000 | mapped to `http://`, default port **8123**
-`clickhouses://` | native TCP over TLS, default port 9440 | mapped to `https://`, default port **8443**
-`http://`, `https://` | rejected | used as is
-
-Note that with `clickhouse-connect` the `clickhouse://` mapping changes the port from 9000 to 8123: an explicit port in the URL is always kept, so `clickhouse://host:9000` would talk HTTP to port 9000. The resolved scheme, host and port (never the password) are logged at `INFO` level. `--secure` upgrades `http`/`clickhouse` URLs to TLS and never downgrades `https://`/`clickhouses://` ones.
-
-### Transport and TLS
-
-These options work the same with both drivers, with `--db-host`/`--db-port` and with `--db-url`, on every subcommand that connects (`migrate`, `status`, `down`, `dump`, `unlock`). Their variables carry a `CLICKHOUSE_` prefix because names like `KEY` or `SETTINGS` are too likely to be set for something else.
-
-CLI flag | Environment variable | `clickhouse-driver` parameter | `clickhouse-connect` parameter
---- | --- | --- | ---
-`--ca-cert PATH` | `CLICKHOUSE_CA_CERT` | `ca_certs` | `ca_cert`
-`--cert PATH` | `CLICKHOUSE_CERT` | `certfile` | `client_cert`
-`--key PATH` | `CLICKHOUSE_KEY` | `keyfile` | `client_cert_key`
-`--verify` / `--no-verify` (default on) | `CLICKHOUSE_VERIFY` | `verify` | `verify`
-`--connect-timeout SECONDS` | `CLICKHOUSE_CONNECT_TIMEOUT` | `connect_timeout` | `connect_timeout`
-`--query-timeout SECONDS` | `CLICKHOUSE_QUERY_TIMEOUT` | `send_receive_timeout` | `send_receive_timeout`
-`--setting NAME=VALUE` (repeatable) | `CLICKHOUSE_SETTINGS="a=1,b=2"` | `settings` | `settings`
-
-```bash
-clickhouse-migrations migrate --db-url "clickhouses://user:pass@ch.internal:9440/app" \
-  --ca-cert /tls/ca.pem --cert /tls/client.pem --key /tls/client.key \
-  --query-timeout 1800 --setting allow_experimental_json_type=1
-```
-
-- TLS itself is still turned on by `--secure` or a `clickhouses://`/`https://` URL; the certificate options only configure it, and a warning is logged when they are given for a plain connection. `--key` needs `--cert`. `--no-verify` disables certificate (and host name) verification and logs a warning.
-- Unset options keep the driver defaults (both: 10 s to connect, 300 s query timeout). `--query-timeout` is the socket read timeout: over HTTP it bounds the wait for a statement's response; over the native protocol it bounds the silence between two packets, and the server sends progress packets while a query runs, so there it is an inactivity timeout rather than a limit on the total duration. Raise it for long `ALTER ... MATERIALIZE` or `CREATE TABLE ... AS SELECT` migrations.
-- `--setting` values go to the client itself, so they reach **every** statement the tool sends: the migrations, the bookkeeping queries, the lock and `status`/`dump` queries. Values are passed to the server as text and it converts them. An unknown setting fails the run on both drivers (for `clickhouse-driver` the settings are sent as "important"). `--setting` flags win over `CLICKHOUSE_SETTINGS`, which cannot hold a value containing a comma (use the flag). An explicit option also wins over the same parameter in the `--db-url` query string.
-
-**`SET` inside a multi-statement file.** Over the native protocol a file's statements share one session, so `SET x = 1;` at the top applies to the rest of the file. Over HTTP (`clickhouse-connect`) every statement is a separate request: the `SET` only carries over while the HTTP session does, and sessions live on one server, so behind a load balancer or a multi-replica endpoint (ClickHouse Cloud) statement 2 fails with no hint why. Pass the setting with `--setting` (or `settings=` in Python) instead.
 
 ## Migration files
 
@@ -168,6 +157,44 @@ CLI flag | Environment variable | Default
 `--log-level` | `LOG_LEVEL` | `WARNING`
 `--migration-log-format` | `MIGRATION_LOG_FORMAT` | `full`
 `--driver` | `DRIVER` | `clickhouse-driver`
+
+### URL schemes
+
+`--db-url` / `DB_URL` accepts a single URL such as `https://user:pass@host:8443/db`, which is how ClickHouse Cloud hands out credentials. The URL wins over `--db-host`/`--db-port`/`--db-user`/`--db-password`. The scheme is normalised per driver:
+
+Scheme | `clickhouse-driver` | `clickhouse-connect`
+--- | --- | ---
+`clickhouse://` | native TCP, default port 9000 | mapped to `http://`, default port **8123**
+`clickhouses://` | native TCP over TLS, default port 9440 | mapped to `https://`, default port **8443**
+`http://`, `https://` | rejected | used as is
+
+Note that with `clickhouse-connect` the `clickhouse://` mapping changes the port from 9000 to 8123: an explicit port in the URL is always kept, so `clickhouse://host:9000` would talk HTTP to port 9000. The resolved scheme, host and port (never the password) are logged at `INFO` level. `--secure` upgrades `http`/`clickhouse` URLs to TLS and never downgrades `https://`/`clickhouses://` ones.
+
+### Transport and TLS
+
+These options work the same with both drivers, with `--db-host`/`--db-port` and with `--db-url`, on every subcommand that connects (`migrate`, `status`, `down`, `dump`, `unlock`). Their variables carry a `CLICKHOUSE_` prefix because names like `KEY` or `SETTINGS` are too likely to be set for something else.
+
+CLI flag | Environment variable | `clickhouse-driver` parameter | `clickhouse-connect` parameter
+--- | --- | --- | ---
+`--ca-cert PATH` | `CLICKHOUSE_CA_CERT` | `ca_certs` | `ca_cert`
+`--cert PATH` | `CLICKHOUSE_CERT` | `certfile` | `client_cert`
+`--key PATH` | `CLICKHOUSE_KEY` | `keyfile` | `client_cert_key`
+`--verify` / `--no-verify` (default on) | `CLICKHOUSE_VERIFY` | `verify` | `verify`
+`--connect-timeout SECONDS` | `CLICKHOUSE_CONNECT_TIMEOUT` | `connect_timeout` | `connect_timeout`
+`--query-timeout SECONDS` | `CLICKHOUSE_QUERY_TIMEOUT` | `send_receive_timeout` | `send_receive_timeout`
+`--setting NAME=VALUE` (repeatable) | `CLICKHOUSE_SETTINGS="a=1,b=2"` | `settings` | `settings`
+
+```bash
+clickhouse-migrations migrate --db-url "clickhouses://user:pass@ch.internal:9440/app" \
+  --ca-cert /tls/ca.pem --cert /tls/client.pem --key /tls/client.key \
+  --query-timeout 1800 --setting allow_experimental_json_type=1
+```
+
+- TLS itself is still turned on by `--secure` or a `clickhouses://`/`https://` URL; the certificate options only configure it, and a warning is logged when they are given for a plain connection. `--key` needs `--cert`. `--no-verify` disables certificate (and host name) verification and logs a warning.
+- Unset options keep the driver defaults (both: 10 s to connect, 300 s query timeout). `--query-timeout` is the socket read timeout: over HTTP it bounds the wait for a statement's response; over the native protocol it bounds the silence between two packets, and the server sends progress packets while a query runs, so there it is an inactivity timeout rather than a limit on the total duration. Raise it for long `ALTER ... MATERIALIZE` or `CREATE TABLE ... AS SELECT` migrations.
+- `--setting` values go to the client itself, so they reach **every** statement the tool sends: the migrations, the bookkeeping queries, the lock and `status`/`dump` queries. Values are passed to the server as text and it converts them. An unknown setting fails the run on both drivers (for `clickhouse-driver` the settings are sent as "important"). `--setting` flags win over `CLICKHOUSE_SETTINGS`, which cannot hold a value containing a comma (use the flag). An explicit option also wins over the same parameter in the `--db-url` query string.
+
+**`SET` inside a multi-statement file.** Over the native protocol a file's statements share one session, so `SET x = 1;` at the top applies to the rest of the file. Over HTTP (`clickhouse-connect`) every statement is a separate request: the `SET` only carries over while the HTTP session does, and sessions live on one server, so behind a load balancer or a multi-replica endpoint (ClickHouse Cloud) statement 2 fails with no hint why. Pass the setting with `--setting` (or `settings=` in Python) instead.
 
 ### Migrating up to a version
 
@@ -354,7 +381,7 @@ For each migration in range (newest first) it runs the statements from the `.dow
 
 > **This is deliberately naive.** ClickHouse has no transactional DDL, so there is no *automatic* rollback and no all-or-nothing guarantee across statements. Reversible changes (`CREATE TABLE` ↔ `DROP TABLE`, `ADD COLUMN` ↔ `DROP COLUMN`) roll back cleanly; **destructive** operations (data-losing drops, `ALTER … DELETE/UPDATE` mutations) are your responsibility — nothing can bring dropped data back. For a *failed* migration you usually don't need `down` at all: a migration is recorded only after its statements succeed, so a failed one stays `pending` — just fix the SQL and re-run.
 
-`--steps` (default `1`), `--to`, `--dry-run` and `--multi-statement` apply to the `down` subcommand.
+`--steps` (default `1`), `--to`, `--dry-run` and `--multi-statement` apply to the `down` subcommand, as do [`--var` / `--substitute-env`](#variable-substitution) for templated `.down.sql` files and [`--lock`](#concurrent-runs-and-locking).
 
 ### Variable substitution
 
@@ -427,6 +454,7 @@ SQL is what the server receives, so:
 
 Keep that in mind before putting passwords into variables; for dictionary sources consider
 [named collections](https://clickhouse.com/docs/en/operations/named-collections) instead.
+
 ### Adopting an existing database
 
 Most databases already have a schema before the tool shows up. Write migrations that describe the existing schema (`clickhouse-migrations dump` gives you a starting point), then mark them as applied **without executing them** using `baseline`:
@@ -643,6 +671,24 @@ Parameter | Description | Default
 `secure` | Use secure (TLS) connection | `False`
 `ca_cert`, `cert`, `key`, `verify`, `connect_timeout`, `query_timeout`, `settings` | Constructor parameters of `ClickhouseCluster`, same meaning as the [transport options](#transport-and-tls) (`settings` is a dict); `None` keeps the driver default. Other keyword arguments still go to `clickhouse_driver.Client` as is (now also with `db_url`), and an explicit parameter wins over a keyword argument for the same driver parameter | `None`
 `migration_log_format` | Migration log format `full` logs the full Migration object, `compact` logs only version and md5 | `full`
+
+The table lists the `ClickhouseCluster` constructor and `migrate()` parameters. Every subcommand has a Python counterpart:
+
+```python
+from clickhouse_migrations.schema_diff import write_diff_migration
+from clickhouse_migrations.validate import validate_migrations
+
+rows = cluster.status("test", "./migrations")           # [StatusRow(version, state, md5, applied_at, has_down)]
+cluster.rollback("test", "./migrations", steps=1)       # versions rolled back, newest first
+cluster.baseline("test", "./migrations", to_version=3)  # record 1..3 as applied, execute nothing
+cluster.repair("test", "./migrations", write=True)      # fix the md5 of edited applied migrations
+schema = cluster.dump("test")                           # the live schema as portable SQL
+sql = cluster.diff(open("schema.sql").read(), db_name="test")
+if sql:
+    write_diff_migration("./migrations", sql)           # written as the next numbered migration
+cluster.force_unlock("test")                            # release a lock left by a dead run
+report = validate_migrations("./migrations")            # offline; report.findings
+```
 
 ### The migrations table
 
