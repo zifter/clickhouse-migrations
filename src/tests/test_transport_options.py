@@ -462,7 +462,7 @@ def test_main_no_verify_warns(monkeypatch, caplog, capsys):
             calls.append(self.transport.verify)
             return []
 
-    monkeypatch.setattr(command_line, "ClickhouseCluster", _Cluster)
+    monkeypatch.setattr("clickhouse_migrations.cli.common.ClickhouseCluster", _Cluster)
     monkeypatch.setattr(
         "sys.argv", ["clickhouse-migrations", "status", "--secure", "--no-verify"]
     )

@@ -325,7 +325,9 @@ def _run(monkeypatch, capsys, rows, *argv):
         baseline=lambda **kw: rows,
         repair=lambda **kw: rows,
     )
-    monkeypatch.setattr(command_line, "create_cluster", lambda ctx: cluster)
+    monkeypatch.setattr(
+        "clickhouse_migrations.cli.common.create_cluster", lambda ctx: cluster
+    )
     monkeypatch.setattr(sys, "argv", ["clickhouse-migrations", *argv])
     code = main()
     return code, capsys.readouterr()
@@ -371,7 +373,9 @@ def test_repair_error_exits_1(monkeypatch, caplog):
         raise MigrationException("boom")
 
     cluster = types.SimpleNamespace(repair=fail)
-    monkeypatch.setattr(command_line, "create_cluster", lambda ctx: cluster)
+    monkeypatch.setattr(
+        "clickhouse_migrations.cli.common.create_cluster", lambda ctx: cluster
+    )
     monkeypatch.setattr(sys, "argv", ["clickhouse-migrations", "repair"])
 
     assert main() == 1

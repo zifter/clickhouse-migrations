@@ -131,7 +131,9 @@ class _FakeCluster:  # pylint: disable=too-few-public-methods
 
 
 def _main(monkeypatch, capsys, cluster, *args):
-    monkeypatch.setattr(command_line, "create_cluster", lambda ctx: cluster)
+    monkeypatch.setattr(
+        "clickhouse_migrations.cli.common.create_cluster", lambda ctx: cluster
+    )
     monkeypatch.setattr(sys, "argv", ["clickhouse-migrations", "dump", *args])
     code = main()
     captured = capsys.readouterr()
