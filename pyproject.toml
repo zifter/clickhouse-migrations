@@ -60,7 +60,8 @@ fallback_version = "0.0.0"
 [tool.setuptools]
 package-dir = { "clickhouse_migrations" = "src/clickhouse_migrations", "tests" = "src/tests" }
 packages = [
-    "clickhouse_migrations"
+    "clickhouse_migrations",
+    "clickhouse_migrations.cli",
 ]
 
 [tool.pytest.ini_options]
