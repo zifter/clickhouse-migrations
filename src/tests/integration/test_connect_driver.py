@@ -66,6 +66,10 @@ def test_connect_migrate_on_cluster(connect_cluster: ClickhouseCluster, _schema)
     [
         "clickhouse://default:@localhost:8123/pytest",
         "http://default:@localhost:8123/pytest",
+        # Client parameters in the query string (clickhouse-connect < 0.7.9
+        # passed them to the client as lists and failed).
+        "http://default:@localhost:8123/pytest"
+        "?connect_timeout=5&send_receive_timeout=30&compress=false",
     ],
 )
 def test_connect_db_url_migrate_and_status(url):

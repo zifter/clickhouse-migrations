@@ -40,6 +40,10 @@ make test            # runs tox: linters + tests + coverage
 make docker-compose-down
 ```
 
+`tox -e py39-mindeps` (needs Python 3.9 and the running cluster) runs the full
+suite against the minimum `clickhouse-driver` / `clickhouse-connect` versions
+declared in `pyproject.toml`; raise the pins in `tox.ini` together with them.
+
 Integration tests live under `src/tests/integration/` and are auto-marked with
 the `integration` marker.
 
