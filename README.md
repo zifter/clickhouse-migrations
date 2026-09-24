@@ -667,7 +667,7 @@ Parameter | Description | Default
 `to_version` | Apply pending migrations only up to and including this version; mutually exclusive with `explicit_migrations` | `None`
 `lock` | Take the [migration lock](#concurrent-runs-and-locking) for the run (opt-in; fails if the server cannot provide it) | `False`
 `lock_timeout` | Seconds to wait for a lock held by another run (`0` fails immediately) | `300`
-`lock_ttl` | Seconds after which a lock is considered stale and may be taken over | `3600`
+`lock_ttl` | Seconds after which a lock that is no longer refreshed is considered stale and may be taken over (a live run refreshes it every `lock_ttl / 3` seconds) | `3600`
 `variables` | `{"NAME": "value"}` for [`${NAME}` substitution](#variable-substitution); enables it on its own (also on `rollback`) | `None`
 `substitute_env` | Also substitute from the process environment; `variables` win (also on `rollback`) | `False`
 `secure` | Use secure (TLS) connection | `False`
@@ -738,6 +738,7 @@ ENGINE = KeeperMap('/clickhouse-migrations/<database>') PRIMARY KEY name
   `Could not take the migration lock on "mydb"."schema_versions_lock" within 300s: it is held by migrator-abc:1:…, which has held it for 42s.`
 * The lock is released in a `finally`, deleting **only** rows whose `owner` matches — a run never drops somebody else's lock, even after a failure or a `Ctrl-C`.
 * A lock older than `--lock-ttl` is stale and is taken over with a warning. The takeover is a compare-and-delete on `(owner, acquired_at)` followed by the normal strict insert, so of two runs seeing the same stale lock only one can win.
+* While a run holds the lock, a background **heartbeat** refreshes `acquired_at` every `--lock-ttl / 3` seconds (at least every second; every 20 minutes with the default TTL) over its own connection, so a long migration keeps its lock however long it takes — **`--lock-ttl` only matters for runs that died** (or hang without reaching the server). The refresh is `ALTER TABLE … UPDATE acquired_at = now() WHERE owner = <ours> SETTINGS keeper_map_strict_mode = 1`: on `KeeperMap` it runs synchronously as a versioned Keeper `set` of our own row, so it can never touch or recreate somebody else's lock. A failed refresh is logged and retried at the next tick. If a refresh finds the lock gone or owned by another run (e.g. it was force-released with `unlock`, or the heartbeat could not reach the server for a whole TTL), the run logs an **error** naming the new owner and stops refreshing, but the migration itself is not interrupted.
 * The lock table (`<migrations table>_lock`, next to the bookkeeping table) is created on demand, only when `--lock` is used. A run without `--lock` does no lock-related work at all and is not blocked by a lock somebody else holds.
 * `status` is read-only and never locks, `--dry-run` never locks, and `new` never touches the database at all.
 
@@ -745,7 +746,7 @@ CLI flag | Environment variable | Default | Meaning
 ---------|---------------------|---------|--------
 `--lock` / `--no-lock` | `LOCK` | `false` | Take the migration lock for this run; the run **fails** if the server cannot provide it (see below)
 `--lock-timeout` | `LOCK_TIMEOUT` | `300` | Seconds to wait for a lock held by another run; `0` fails immediately
-`--lock-ttl` | `LOCK_TTL` | `3600` | Seconds after which a lock counts as stale and may be taken over
+`--lock-ttl` | `LOCK_TTL` | `3600` | Seconds after which a lock that is no longer refreshed counts as stale and may be taken over; a live run refreshes it every `ttl / 3` seconds
 
 #### If a run dies while holding the lock
 

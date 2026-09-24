@@ -16,15 +16,21 @@ makes it a usable mutex:
   compare-and-delete on ``(owner, acquired_at)`` and then re-acquired through
   the normal strict insert - two waiters may both try, but only one insert can
   win.
+* heartbeat: while the lock is held, :class:`LockHeartbeat` refreshes
+  ``acquired_at`` from a background thread, so only a run that is gone (or
+  hung) ever looks stale - a long migration keeps its lock however long it
+  takes.
 
 Locking is opt-in (``--lock`` / ``lock=True``): when it is asked for and the
 server cannot provide it, the run fails instead of silently continuing
 unprotected.
 """
 
+import copy
 import logging
 import os
 import socket
+import threading
 import time
 from collections import namedtuple
 from typing import Optional
@@ -54,6 +60,12 @@ LOCK_TABLE_SUFFIX = "_lock"
 KEEPER_PATH_PREFIX = "/clickhouse-migrations"
 # How often a waiter retries while the lock is held.
 LOCK_POLL_INTERVAL = 1.0
+# The heartbeat refreshes a held lock every ttl / 3 seconds (at least every
+# HEARTBEAT_MIN_INTERVAL), so two refreshes can fail before it goes stale.
+HEARTBEAT_TTL_DIVISOR = 3
+HEARTBEAT_MIN_INTERVAL = 1.0
+# How long releasing the lock waits for a refresh that is still in flight.
+HEARTBEAT_JOIN_TIMEOUT = 5.0
 
 # Current holder of the lock. ``age`` is computed by the server, so it does not
 # depend on the clock of the machine running the migration.
@@ -63,6 +75,11 @@ LockHolder = namedtuple("LockHolder", ["owner", "acquired_ts", "age"])
 def make_owner() -> str:
     """Identify this run in error messages: host, pid and a unique suffix."""
     return f"{socket.gethostname()}:{os.getpid()}:{uuid4()}"
+
+
+def heartbeat_interval(ttl: float) -> float:
+    """Seconds between two refreshes of a lock with the given TTL."""
+    return max(HEARTBEAT_MIN_INTERVAL, ttl / HEARTBEAT_TTL_DIVISOR)
 
 
 def _is_conflict(exc: Exception) -> bool:
@@ -123,6 +140,20 @@ class KeeperMapLock:  # pylint: disable=too-many-instance-attributes
     @property
     def acquired(self) -> bool:
         return self._acquired
+
+    @property
+    def ttl(self) -> int:
+        return self._ttl
+
+    def bound_to(self, conn: Connection) -> "KeeperMapLock":
+        """The same lock (table, owner, TTL) issuing its queries on ``conn``.
+
+        The heartbeat refreshes the lock from another thread, and a client of
+        either driver must not be shared between threads.
+        """
+        bound = copy.copy(self)
+        bound._conn = conn  # pylint: disable=protected-access
+        return bound
 
     def unsupported_reason(self) -> Optional[str]:
         """Why locking is unavailable here, or None when it works.
@@ -239,6 +270,32 @@ class KeeperMapLock:  # pylint: disable=too-many-instance-attributes
             f"AND toUnixTimestamp(acquired_at) = {int(holder.acquired_ts)}"
         )
 
+    def refresh(self) -> Optional[LockHolder]:
+        """Move ``acquired_at`` of our own row to now; return the holder.
+
+        On a KeeperMap table ``ALTER TABLE ... UPDATE`` is executed right away
+        (it is not a background mutation, so there is nothing to wait for) as
+        a Keeper ``set`` of every matching row, and ``keeper_map_strict_mode``
+        makes that ``set`` conditional on the row version read by the same
+        query. So the refresh is a compare-and-set on our own row: a lock that
+        was released or taken over is never matched by ``owner`` and never
+        recreated (a ``set`` cannot create a row), and a takeover racing the
+        refresh makes the ``set`` fail instead of overwriting the new row.
+        (Keeper restarts versions when a row is recreated, so only a new row
+        created *and* updated to our version inside that one query's
+        read-then-set window could slip through - and a takeover needs our
+        lock to have gone without a refresh for a whole TTL first.)
+
+        The returned holder tells the caller whether the lock is still ours.
+        """
+        self._conn.command(
+            f"ALTER TABLE {self._table} UPDATE acquired_at = now() "
+            f"WHERE name = {quote_string(LOCK_NAME)} "
+            f"AND owner = {quote_string(self._owner)} "
+            "SETTINGS keeper_map_strict_mode = 1"
+        )
+        return self.holder()
+
     def _timeout_message(self, holder: Optional[LockHolder]) -> str:
         if holder is None:
             held_by = "it is held by another migration run"
@@ -302,3 +359,116 @@ class KeeperMapLock:  # pylint: disable=too-many-instance-attributes
             f"AND name = {quote_string(table)}"
         )
         return bool(rows[0]["n"])
+
+
+class LockHeartbeat:
+    """Keep a held lock fresh from a daemon thread until :meth:`stop`.
+
+    Every ``interval`` seconds the lock is refreshed (see
+    :meth:`KeeperMapLock.refresh`). A failed refresh is logged and retried at
+    the next tick. When the lock turns out to be gone or owned by somebody
+    else, an error is logged and the heartbeat stops: the migration itself is
+    not interrupted (a half-applied migration is worse than a loud log line),
+    but concurrent runs are no longer excluded from that moment on.
+    """
+
+    def __init__(
+        self,
+        lock: KeeperMapLock,
+        interval: Optional[float] = None,
+        join_timeout: float = HEARTBEAT_JOIN_TIMEOUT,
+    ):
+        self._lock = lock
+        self._interval = (
+            interval if interval is not None else heartbeat_interval(lock.ttl)
+        )
+        self._join_timeout = join_timeout
+        self._stopped = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"clickhouse-migrations-lock-heartbeat-{lock.owner}",
+            # Never keeps the process alive, whatever happens to the run.
+            daemon=True,
+        )
+        self.lost = False
+        self.refreshed = 0
+
+    @property
+    def interval(self) -> float:
+        return self._interval
+
+    @property
+    def alive(self) -> bool:
+        return self._thread.is_alive()
+
+    def start(self) -> "LockHeartbeat":
+        self._thread.start()
+        logging.info(
+            "Refreshing the migration lock on %s every %gs",
+            self._lock.table,
+            self._interval,
+        )
+        return self
+
+    def stop(self) -> None:
+        """Stop refreshing; wait (bounded) for a refresh still in flight.
+
+        A refresh that outlives the timeout cannot resurrect the lock after it
+        is released: it only ever updates an existing row of our own.
+        """
+        self._stopped.set()
+        if not self._thread.is_alive():
+            return
+
+        self._thread.join(self._join_timeout)
+        if self._thread.is_alive():
+            logging.warning(
+                "The migration lock heartbeat on %s did not stop within %gs; "
+                "releasing the lock anyway.",
+                self._lock.table,
+                self._join_timeout,
+            )
+
+    def _run(self) -> None:
+        while not self._stopped.wait(self._interval):
+            if not self.beat():
+                return
+
+    def beat(self) -> bool:
+        """Refresh once; whether the heartbeat should keep going."""
+        try:
+            holder = self._lock.refresh()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            if not self._stopped.is_set():
+                logging.warning(
+                    "Failed to refresh the migration lock on %s: %s. "
+                    "Retrying in %gs.",
+                    self._lock.table,
+                    exc,
+                    self._interval,
+                )
+            return True
+
+        if holder is not None and holder.owner == self._lock.owner:
+            self.refreshed += 1
+            logging.debug("Migration lock on %s refreshed", self._lock.table)
+            return True
+
+        if self._stopped.is_set():
+            # Released while this refresh was in flight: nothing was lost.
+            return False
+
+        self.lost = True
+        if holder is None:
+            what = "is gone (released or force-released with 'unlock')"
+        else:
+            what = f"was taken over by {holder.owner}"
+        logging.error(
+            "The migration lock on %s held by %s %s while this run is still "
+            "migrating: concurrent runs are no longer excluded. The heartbeat "
+            "stops; the migration continues.",
+            self._lock.table,
+            self._lock.owner,
+            what,
+        )
+        return False

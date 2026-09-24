@@ -31,7 +31,7 @@ from clickhouse_migrations.defaults import (
     MIGRATIONS_TABLE_ENGINE,
 )
 from clickhouse_migrations.exceptions import MigrationException
-from clickhouse_migrations.lock import KeeperMapLock, LockHolder
+from clickhouse_migrations.lock import KeeperMapLock, LockHeartbeat, LockHolder
 from clickhouse_migrations.migration import Migration, MigrationStorage
 from clickhouse_migrations.migrator import (
     STATUS_APPLIED,
@@ -856,13 +856,16 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
         lock_timeout: int = LOCK_TIMEOUT,
         lock_ttl: int = LOCK_TTL,
         enabled: bool = True,
+        heartbeat_interval: Optional[float] = None,
     ):
         """Hold the migration lock of ``db_name`` for the duration of the block.
 
         Locking is opt-in: without ``lock`` nothing lock-related touches the
         database at all, and the run behaves exactly as it did before the lock
         existed. With it, the lock uses its own connection so releasing it does
-        not depend on the state of the connection that ran the migrations.
+        not depend on the state of the connection that ran the migrations, and
+        a heartbeat thread keeps it fresh over a third connection (the default
+        interval is ``lock_ttl / 3``, at least 1s).
         """
         db_name = db_name if db_name is not None else self.default_db_name
 
@@ -871,14 +874,30 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             return
 
         with self.connection(db_name) as lock_conn:
-            migration_lock = self._lock(lock_conn, db_name, lock_timeout, lock_ttl)
-            migration_lock.acquire()
-            try:
-                yield migration_lock
-            finally:
-                # Also covers a failing migration and KeyboardInterrupt: a lock
-                # we never took is never released, and only our own row goes.
-                migration_lock.release()
+            # The heartbeat refreshes the lock from its own thread: a client
+            # must not be shared between threads.
+            with self.connection(db_name) as heartbeat_conn:
+                migration_lock = self._lock(lock_conn, db_name, lock_timeout, lock_ttl)
+                heartbeat = LockHeartbeat(
+                    migration_lock.bound_to(heartbeat_conn), heartbeat_interval
+                )
+                migration_lock.acquire()
+                try:
+                    heartbeat.start()
+                    yield migration_lock
+                finally:
+                    # Also covers a failing migration and KeyboardInterrupt: a
+                    # lock we never took is never released, and only our own
+                    # row goes. The heartbeat stops first so it cannot refresh
+                    # a released lock, and a failure to stop it never prevents
+                    # the release.
+                    try:
+                        heartbeat.stop()
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        logging.warning(
+                            "Failed to stop the migration lock heartbeat: %s", exc
+                        )
+                    migration_lock.release()
 
     def force_unlock(self, db_name: Optional[str] = None) -> Optional[LockHolder]:
         """Force-release the migration lock of a database ("unlock")."""

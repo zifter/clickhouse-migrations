@@ -3,6 +3,8 @@ import logging
 import os
 import subprocess
 import sys
+import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -63,6 +65,17 @@ try:
 except Exception as exc:  # noqa: BLE001
     print(json.dumps({"worker": worker, "error": str(exc)}))
 """
+
+
+# A run that takes ~8s with a lock TTL of 3s (heartbeat every second): only
+# the heartbeat keeps the lock from looking stale to a second run.
+LONG_RUN_TTL = 3
+LONG_MIGRATIONS = {
+    "001_long_one.sql": "SELECT sleep(2);\nSELECT sleep(2);\n"
+    "CREATE TABLE IF NOT EXISTS long_one (i UInt32) ENGINE = MergeTree ORDER BY i;\n",
+    "002_long_two.sql": "SELECT sleep(2);\nSELECT sleep(2);\n"
+    "CREATE TABLE IF NOT EXISTS long_two (i UInt32) ENGINE = MergeTree ORDER BY i;\n",
+}
 
 
 @pytest.fixture(name="slow_migrations")
@@ -367,3 +380,140 @@ def test_lock_on_cluster_needs_no_on_cluster_ddl(cluster, _schema):
     assert LOCK_TABLE in cluster.show_tables("pytest")
     assert current_holder(cluster) is None
     assert lock_module.LOCK_NAME == "migrate"
+
+
+@pytest.fixture(name="long_migrations")
+def long_migrations_fixture(tmp_path) -> Path:
+    directory = tmp_path / "long_migrations"
+    directory.mkdir()
+    for name, script in LONG_MIGRATIONS.items():
+        (directory / name).write_text(script, encoding="utf8")
+
+    return directory
+
+
+class LongRun(threading.Thread):
+    """One locked migration run with the short TTL, in a thread of its own."""
+
+    def __init__(self, migrations_dir):
+        super().__init__(daemon=True)
+        self.migrations_dir = migrations_dir
+        self.applied = None
+        self.waited = None
+
+    def run(self):
+        started = time.monotonic()
+        cluster = ClickhouseCluster(
+            db_host="localhost", db_user="default", db_password=""
+        )
+        applied = cluster.migrate(
+            "pytest",
+            self.migrations_dir,
+            lock=True,
+            lock_ttl=LONG_RUN_TTL,
+            lock_timeout=60,
+        )
+        self.applied = [migration.version for migration in applied]
+        self.waited = time.monotonic() - started
+
+
+def race_a_long_run(cluster, migrations_dir):
+    """Start a second run while a long one holds the lock; sample the lock.
+
+    Returns both runs and the ages of the lock seen while the first one ran.
+    """
+    with cluster.connection("pytest") as conn:
+        # Create the lock table up front so it can be sampled from the start.
+        assert KeeperMapLock(conn, "pytest").unsupported_reason() is None
+
+    first, second = LongRun(migrations_dir), LongRun(migrations_dir)
+    first.start()
+    ages = []
+    while first.is_alive():
+        holder = current_holder(cluster)
+        if holder is not None:
+            ages.append(holder.age)
+            if second.ident is None:
+                # The first run holds the lock: now the second one competes.
+                second.start()
+        time.sleep(0.25)
+
+    first.join(60)
+    second.join(60)
+    return first, second, ages
+
+
+def test_a_run_longer_than_the_ttl_keeps_its_lock(cluster, long_migrations, caplog):
+    with caplog.at_level(logging.INFO):
+        first, second, ages = race_a_long_run(cluster, long_migrations)
+
+    assert first.applied == [1, 2]
+    # The second run waited for the whole first run instead of taking over...
+    assert second.applied == []
+    assert second.waited > LONG_RUN_TTL + 1
+    assert "stale migration lock" not in caplog.text
+    assert "taken over" not in caplog.text
+    # ... because the heartbeat never let the lock get anywhere near the TTL.
+    assert "every 1s" in caplog.text
+    assert ages and max(ages) < LONG_RUN_TTL
+    assert schema_version_rows(cluster) == [(1, 1), (2, 1)]
+    assert current_holder(cluster) is None
+
+
+def test_without_the_heartbeat_the_same_run_loses_its_lock(
+    cluster, long_migrations, caplog, monkeypatch
+):
+    # The control for the test above: a refresh that changes nothing is the
+    # behaviour before the heartbeat existed.
+    monkeypatch.setattr(KeeperMapLock, "refresh", KeeperMapLock.holder)
+
+    with caplog.at_level(logging.INFO):
+        first, second, ages = race_a_long_run(cluster, long_migrations)
+
+    assert first.applied == [1, 2]
+    # The second run took the "stale" lock over while the first still ran and
+    # applied migration 2 a second time - what the lock exists to prevent...
+    assert "stale migration lock" in caplog.text
+    assert max(ages) >= LONG_RUN_TTL
+    assert 2 in second.applied
+    assert (2, 2) in schema_version_rows(cluster)
+    # ... and the first run's heartbeat noticed and said so.
+    assert "was taken over by" in caplog.text
+    assert "concurrent runs are no longer excluded" in caplog.text
+    assert current_holder(cluster) is None
+
+
+def test_heartbeat_refreshes_the_lock_on_the_server(cluster):
+    # Both drivers' clients accept the refresh statement, and it really moves
+    # acquired_at of our own row only.
+    for driver, port in (("clickhouse-driver", "9000"), ("clickhouse-connect", "8123")):
+        driver_cluster = ClickhouseCluster(
+            db_host="localhost",
+            db_user="default",
+            db_password="",
+            db_port=port,
+            driver=driver,
+        )
+        with driver_cluster.connection("pytest") as conn:
+            held = KeeperMapLock(conn, "pytest", timeout=0, owner=f"me-{driver}")
+            assert held.acquire() is True
+            conn.command(
+                f"ALTER TABLE {held.table} UPDATE acquired_at = now() - 100 "
+                "WHERE name = 'migrate' SETTINGS keeper_map_strict_mode = 1"
+            )
+            assert current_holder(cluster).age >= 100
+
+            refreshed = held.refresh()
+
+            assert refreshed.owner == f"me-{driver}"
+            assert refreshed.age <= 1
+            held.release()
+            # A released lock is never recreated by a late refresh.
+            assert held.refresh() is None
+            assert current_holder(cluster) is None
+
+    with foreign_lock(cluster) as foreign:
+        with cluster.connection("pytest") as conn:
+            mine = KeeperMapLock(conn, "pytest", timeout=0, owner="me")
+            assert mine.refresh().owner == OTHER_OWNER
+        assert current_holder(cluster).acquired_ts == foreign.holder().acquired_ts

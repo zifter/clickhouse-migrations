@@ -1,5 +1,6 @@
 import logging
 import re
+import threading
 import types
 from typing import Dict, List, Optional, Tuple
 
@@ -12,7 +13,9 @@ from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.lock import (
     LOCK_NAME,
     KeeperMapLock,
+    LockHeartbeat,
     LockHolder,
+    heartbeat_interval,
     make_owner,
 )
 
@@ -27,7 +30,7 @@ NODE_EXISTS = (
 NOW = 1_700_000_000
 
 
-class FakeKeeperMap(Connection):
+class FakeKeeperMap(Connection):  # pylint: disable=too-many-instance-attributes
     """In-memory stand-in for a KeeperMap-backed lock table.
 
     Only the statements the lock itself issues are understood; anything else
@@ -44,6 +47,8 @@ class FakeKeeperMap(Connection):
         # fails, the way a broken connection would.
         self.fail: Optional[Tuple[str, Exception]] = None
         self.on_insert = None
+        # Called before every refresh (ALTER TABLE ... UPDATE); may raise.
+        self.on_alter = None
 
     # -- helpers -------------------------------------------------------
     @staticmethod
@@ -80,6 +85,10 @@ class FakeKeeperMap(Connection):
             self._delete(statement)
             return
 
+        if statement.startswith("ALTER TABLE"):
+            self._update(statement)
+            return
+
         raise AssertionError(f"unexpected statement: {statement}")
 
     def _delete(self, statement: str) -> None:
@@ -96,6 +105,18 @@ class FakeKeeperMap(Connection):
             return
 
         self.row = None
+
+    def _update(self, statement: str) -> None:
+        # The refresh must be a compare-and-set on our own row.
+        assert "SETTINGS keeper_map_strict_mode = 1" in statement
+        assert "UPDATE acquired_at = now()" in statement
+        if self.on_alter is not None:
+            self.on_alter()
+
+        name, owner = self._literals(statement)
+        assert name == LOCK_NAME
+        if self.row is not None and self.row["owner"] == owner:
+            self.row["acquired_at"] = self.now
 
     def query(self, statement: str) -> List[Dict]:
         self.statements.append(statement)
@@ -430,6 +451,242 @@ def test_force_release_drops_someone_elses_lock():
     assert conn.row is None
 
 
+def test_heartbeat_interval_is_a_third_of_the_ttl_but_at_least_a_second():
+    assert heartbeat_interval(3600) == 1200
+    assert heartbeat_interval(3) == 1
+    assert heartbeat_interval(1) == 1
+    assert heartbeat_interval(0) == 1
+    assert LockHeartbeat(build_lock(FakeKeeperMap(), ttl=30)).interval == 10
+    assert LockHeartbeat(build_lock(FakeKeeperMap()), interval=0.5).interval == 0.5
+
+
+def test_refresh_moves_acquired_at_of_our_own_row():
+    conn = FakeKeeperMap()
+    migration_lock = build_lock(conn)
+    migration_lock.acquire()
+    conn.now += 100
+
+    assert migration_lock.refresh() == LockHolder("me", NOW + 100, 0)
+    assert 'ALTER TABLE "pytest"."schema_versions_lock" UPDATE' in (conn.statements[-2])
+    assert "AND owner = 'me'" in conn.statements[-2]
+
+
+def test_refresh_never_touches_somebody_elses_row():
+    conn = FakeKeeperMap()
+    conn.set_row("other", acquired_at=NOW - 50)
+
+    assert build_lock(conn).refresh() == LockHolder("other", NOW - 50, 50)
+    assert conn.row == {"owner": "other", "acquired_at": NOW - 50}
+
+
+def test_refresh_never_recreates_a_released_lock():
+    conn = FakeKeeperMap()
+
+    assert build_lock(conn).refresh() is None
+    assert conn.row is None
+
+
+def test_bound_to_is_the_same_lock_on_another_connection():
+    conn, other_conn = FakeKeeperMap(), FakeKeeperMap()
+    migration_lock = build_lock(conn, ttl=30)
+    other_conn.set_row("me")
+
+    bound = migration_lock.bound_to(other_conn)
+
+    assert (bound.table, bound.owner, bound.ttl) == (migration_lock.table, "me", 30)
+    bound.refresh()
+    assert not conn.statements
+    assert len(other_conn.statements) == 2
+
+
+def held_heartbeat(conn=None, **kwargs):
+    conn = conn if conn is not None else FakeKeeperMap()
+    migration_lock = build_lock(conn)
+    migration_lock.acquire()
+    return conn, LockHeartbeat(migration_lock, **kwargs)
+
+
+def test_beat_keeps_our_lock_fresh():
+    conn, heartbeat = held_heartbeat()
+    conn.now += 10
+
+    assert heartbeat.beat() is True
+    assert heartbeat.beat() is True
+
+    assert conn.row["acquired_at"] == NOW + 10
+    assert heartbeat.refreshed == 2
+    assert heartbeat.lost is False
+
+
+def test_beat_reports_a_lock_taken_over_and_stops(caplog):
+    conn, heartbeat = held_heartbeat()
+    conn.set_row("thief:9:uuid")
+
+    with caplog.at_level(logging.ERROR):
+        assert heartbeat.beat() is False
+
+    assert heartbeat.lost is True
+    assert "was taken over by thief:9:uuid" in caplog.text
+    assert "held by me" in caplog.text
+    assert "the migration continues" in caplog.text
+    # Somebody else's lock is left alone.
+    assert conn.row["owner"] == "thief:9:uuid"
+
+
+def test_beat_reports_a_lock_that_is_gone_and_stops(caplog):
+    conn, heartbeat = held_heartbeat()
+    conn.row = None
+
+    with caplog.at_level(logging.ERROR):
+        assert heartbeat.beat() is False
+
+    assert heartbeat.lost is True
+    assert "is gone" in caplog.text
+    assert "unlock" in caplog.text
+    assert conn.row is None
+
+
+def test_beat_retries_after_a_transient_error(caplog):
+    conn, heartbeat = held_heartbeat(interval=7)
+    conn.fail = ("ALTER TABLE", RuntimeError("Code: 210. Connection reset"))
+    conn.now += 10
+
+    with caplog.at_level(logging.WARNING):
+        assert heartbeat.beat() is True
+
+    assert "Failed to refresh the migration lock" in caplog.text
+    assert "Connection reset" in caplog.text
+    assert "Retrying in 7s" in caplog.text
+    assert heartbeat.lost is False
+
+    conn.fail = None
+    assert heartbeat.beat() is True
+    assert conn.row["acquired_at"] == NOW + 10
+    assert heartbeat.refreshed == 1
+
+
+def test_beat_after_stop_stays_quiet(caplog):
+    conn, heartbeat = held_heartbeat()
+    heartbeat.stop()
+
+    # A refresh still in flight when the lock was released: neither the
+    # vanished row nor an error is reported as a lost lock.
+    conn.row = None
+    with caplog.at_level(logging.WARNING):
+        assert heartbeat.beat() is False
+        conn.fail = ("ALTER TABLE", RuntimeError("connection closed"))
+        assert heartbeat.beat() is True
+
+    assert heartbeat.lost is False
+    assert caplog.text == ""
+
+
+class BeatCounter:
+    """Lets a test wait for the n-th refresh instead of sleeping."""
+
+    def __init__(self, conn: FakeKeeperMap, until: int):
+        self.count = 0
+        self.until = until
+        self.done = threading.Event()
+        conn.on_alter = self
+
+    def __call__(self):
+        self.count += 1
+        if self.count >= self.until:
+            self.done.set()
+
+    def wait(self) -> bool:
+        return self.done.wait(10)
+
+
+def test_heartbeat_thread_refreshes_until_stopped():
+    conn, heartbeat = held_heartbeat(interval=0.001)
+    counter = BeatCounter(conn, until=3)
+
+    heartbeat.start()
+    assert counter.wait()
+    heartbeat.stop()
+
+    assert not heartbeat.alive
+    assert heartbeat.refreshed >= 3
+    # Nothing is refreshed once stop() has returned.
+    statements = len(conn.statements)
+    assert not threading.Event().wait(0.01)
+    assert len(conn.statements) == statements
+
+
+def test_heartbeat_thread_survives_errors_and_recovers(caplog):
+    conn, heartbeat = held_heartbeat(interval=0.001)
+    counter = BeatCounter(conn, until=4)
+
+    def flaky():
+        counter()
+        if counter.count <= 2:
+            raise RuntimeError("Code: 210. Connection reset")
+
+    conn.on_alter = flaky
+    with caplog.at_level(logging.WARNING):
+        heartbeat.start()
+        assert counter.wait()
+        heartbeat.stop()
+
+    assert caplog.text.count("Failed to refresh the migration lock") == 2
+    assert heartbeat.lost is False
+    assert heartbeat.refreshed >= 2
+
+
+def test_heartbeat_thread_stops_by_itself_when_the_lock_is_lost(caplog):
+    conn, heartbeat = held_heartbeat(interval=0.001)
+    conn.set_row("thief:9:uuid")
+
+    with caplog.at_level(logging.ERROR):
+        heartbeat.start()
+        heartbeat._thread.join(10)  # pylint: disable=protected-access
+
+    assert not heartbeat.alive
+    assert heartbeat.lost is True
+    assert "taken over by thief:9:uuid" in caplog.text
+    heartbeat.stop()
+
+
+def test_heartbeat_thread_is_a_daemon():
+    _, heartbeat = held_heartbeat()
+
+    assert heartbeat._thread.daemon is True  # pylint: disable=protected-access
+    assert heartbeat.alive is False
+
+
+def test_stop_before_start_is_a_no_op():
+    _, heartbeat = held_heartbeat()
+
+    heartbeat.stop()
+
+    assert heartbeat.alive is False
+
+
+def test_stop_does_not_wait_forever_for_a_hanging_refresh(caplog):
+    conn, heartbeat = held_heartbeat(interval=0.001, join_timeout=0.01)
+    entered, release = threading.Event(), threading.Event()
+
+    def hang():
+        entered.set()
+        release.wait(10)
+
+    conn.on_alter = hang
+    heartbeat.start()
+    assert entered.wait(10)
+
+    with caplog.at_level(logging.WARNING):
+        heartbeat.stop()
+
+    assert "did not stop within 0.01s" in caplog.text
+    assert heartbeat.alive
+    release.set()
+    heartbeat._thread.join(10)  # pylint: disable=protected-access
+    assert not heartbeat.alive
+    assert heartbeat.lost is False
+
+
 def _cluster(conn, **kwargs):
     cluster = ClickhouseCluster(db_host="localhost", db_name="pytest", **kwargs)
     cluster.connection = lambda db_name=None: conn  # type: ignore[method-assign]
@@ -441,9 +698,21 @@ def test_cluster_lock_is_off_by_default():
 
     with _cluster(conn).migration_lock() as migration_lock:
         assert migration_lock is None
+        assert not heartbeat_threads()
 
     # Nothing lock-related is sent to the server unless the lock is asked for.
     assert not conn.statements
+
+
+def test_cluster_lock_off_opens_no_connection():
+    cluster = _cluster(None)
+    opened = []
+    cluster.connection = lambda db_name=None: opened.append(db_name)
+
+    with cluster.migration_lock(lock=False) as migration_lock:
+        assert migration_lock is None
+
+    assert not opened
 
 
 def test_cluster_lock_is_skipped_when_disabled():
@@ -470,6 +739,91 @@ def test_cluster_lock_is_taken_and_released():
     with _cluster(conn).migration_lock(lock=True) as migration_lock:
         assert migration_lock.acquired is True
         assert conn.row["owner"] == migration_lock.owner
+
+    assert conn.row is None
+
+
+def heartbeat_threads():
+    return [
+        thread
+        for thread in threading.enumerate()
+        if thread.name.startswith("clickhouse-migrations-lock-heartbeat")
+    ]
+
+
+class SameServer(FakeKeeperMap):
+    """A second client of the server behind ``other``: same lock table."""
+
+    def __init__(self, other: FakeKeeperMap):
+        self.other = other
+        super().__init__()
+
+    row = property(
+        lambda self: self.other.row,
+        lambda self, value: setattr(self.other, "row", value),
+    )
+
+
+def test_cluster_lock_runs_a_heartbeat_on_its_own_connection():
+    lock_conn = FakeKeeperMap()
+    heartbeat_conn = SameServer(lock_conn)
+    connections = iter([lock_conn, heartbeat_conn])
+    cluster = _cluster(None)
+    cluster.connection = lambda db_name=None: next(connections)
+    counter = BeatCounter(heartbeat_conn, until=2)
+
+    with cluster.migration_lock(
+        lock=True, lock_ttl=30, heartbeat_interval=0.001
+    ) as migration_lock:
+        assert counter.wait()
+        assert [t.name for t in heartbeat_threads()] == [
+            f"clickhouse-migrations-lock-heartbeat-{migration_lock.owner}"
+        ]
+
+    assert not heartbeat_threads()
+    assert lock_conn.row is None
+    # Refreshes never go over the lock connection.
+    assert not [s for s in lock_conn.statements if s.startswith("ALTER")]
+    assert [s for s in heartbeat_conn.statements if s.startswith("ALTER")]
+
+
+def test_cluster_lock_heartbeat_interval_follows_the_ttl(caplog):
+    conn = FakeKeeperMap()
+
+    with caplog.at_level(logging.INFO):
+        with _cluster(conn).migration_lock(lock=True, lock_ttl=30):
+            pass
+
+    assert "every 10s" in caplog.text
+
+
+def test_cluster_lock_is_released_when_stopping_the_heartbeat_fails(
+    monkeypatch, caplog
+):
+    conn = FakeKeeperMap()
+
+    def broken_stop(self):
+        raise RuntimeError("cannot stop")
+
+    monkeypatch.setattr(LockHeartbeat, "stop", broken_stop)
+    with caplog.at_level(logging.WARNING):
+        with _cluster(conn).migration_lock(lock=True):
+            pass
+
+    assert "Failed to stop the migration lock heartbeat: cannot stop" in caplog.text
+    assert conn.row is None
+
+
+def test_cluster_lock_is_released_when_the_heartbeat_cannot_start(monkeypatch):
+    conn = FakeKeeperMap()
+
+    def broken_start(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(LockHeartbeat, "start", broken_start)
+    # Enter directly: starting the heartbeat fails, so there is no body.
+    with pytest.raises(RuntimeError, match="new thread"):
+        _cluster(conn).migration_lock(lock=True).__enter__()
 
     assert conn.row is None
 
