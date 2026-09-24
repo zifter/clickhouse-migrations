@@ -147,7 +147,9 @@ def test_debug_with_substitution_warns(args, warned, caplog):
 )
 def test_cli_entry_points_warn(entry, method, monkeypatch, caplog):
     fake = types.SimpleNamespace(**{method: lambda **kw: []})
-    monkeypatch.setattr(command_line, "create_cluster", lambda ctx: fake)
+    monkeypatch.setattr(
+        "clickhouse_migrations.cli.common.create_cluster", lambda ctx: fake
+    )
     args = ["--log-level", "debug", "--var", "A=1"]
 
     with caplog.at_level(logging.WARNING):

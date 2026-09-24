@@ -157,7 +157,7 @@ def test_version_subcommand(monkeypatch, capsys):
 
 def test_main_returns_zero_on_success(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["clickhouse-migrations"])
-    monkeypatch.setattr(command_line, "migrate", lambda ctx: [])
+    monkeypatch.setattr("clickhouse_migrations.cli.migrate.migrate", lambda ctx: [])
 
     assert main() == 0
 
@@ -211,7 +211,7 @@ def test_down_subcommand_dry_run_and_no_multi_statement():
 def test_main_down_dispatches_to_rollback(monkeypatch):
     calls = []
     monkeypatch.setattr(sys, "argv", ["clickhouse-migrations", "down"])
-    monkeypatch.setattr(command_line, "rollback", calls.append)
+    monkeypatch.setattr("clickhouse_migrations.cli.down.rollback", calls.append)
 
     assert main() == 0
     assert len(calls) == 1
@@ -504,8 +504,12 @@ def test_format_status_json_shape():
 @pytest.mark.parametrize("pending", [False, True])
 def test_main_status_matrix(monkeypatch, capsys, fmt, state, strict, pending):
     rows = [_status_rows()[state]]
-    monkeypatch.setattr(command_line, "create_cluster", lambda ctx: _FakeCluster())
-    monkeypatch.setattr(command_line, "do_status", lambda cluster, ctx: rows)
+    monkeypatch.setattr(
+        "clickhouse_migrations.cli.common.create_cluster", lambda ctx: _FakeCluster()
+    )
+    monkeypatch.setattr(
+        "clickhouse_migrations.cli.status.do_status", lambda cluster, ctx: rows
+    )
     argv = ["clickhouse-migrations", "status", "--db-name", "test", "--format", fmt]
     if strict:
         argv.append("--strict")
@@ -529,8 +533,12 @@ def test_main_status_matrix(monkeypatch, capsys, fmt, state, strict, pending):
 
 
 def test_show_status_json_falls_back_to_default_db_name(monkeypatch, capsys):
-    monkeypatch.setattr(command_line, "create_cluster", lambda ctx: _FakeCluster())
-    monkeypatch.setattr(command_line, "do_status", lambda cluster, ctx: [])
+    monkeypatch.setattr(
+        "clickhouse_migrations.cli.common.create_cluster", lambda ctx: _FakeCluster()
+    )
+    monkeypatch.setattr(
+        "clickhouse_migrations.cli.status.do_status", lambda cluster, ctx: []
+    )
 
     code = show_status(get_context(["status", "--format", "json"]))
 
@@ -617,8 +625,7 @@ def test_unlock_subcommand_parses_common_arguments():
 
 def test_unlock_reports_nothing_held(monkeypatch, capsys):
     monkeypatch.setattr(
-        command_line,
-        "create_cluster",
+        "clickhouse_migrations.cli.common.create_cluster",
         lambda ctx: types.SimpleNamespace(force_unlock=lambda db_name: None),
     )
 
@@ -629,8 +636,7 @@ def test_unlock_reports_nothing_held(monkeypatch, capsys):
 def test_main_unlock_reports_the_released_holder(monkeypatch, capsys):
     holder = LockHolder("pod-a:7:uuid", 1_700_000_000, 42)
     monkeypatch.setattr(
-        command_line,
-        "create_cluster",
+        "clickhouse_migrations.cli.common.create_cluster",
         lambda ctx: types.SimpleNamespace(force_unlock=lambda db_name: holder),
     )
     monkeypatch.setattr(sys, "argv", ["clickhouse-migrations", "unlock"])
