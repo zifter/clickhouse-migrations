@@ -31,6 +31,13 @@ TOTALS = (
     "CREATE TABLE totals (id UInt64, s UInt64) ENGINE = SummingMergeTree ORDER BY id"
 )
 
+# 23.8 refuses the generated statement: "Alter of type 'MODIFY_QUERY' is not
+# supported by storage MaterializedView". 24.3 is the oldest version tested OK.
+MODIFY_MV_QUERIES = "modify MV queries"
+NEEDS_MODIFY_QUERY = pytest.mark.clickhouse_min_version(
+    "24.3", reason="ALTER TABLE ... MODIFY QUERY of a materialized view"
+)
+
 # Change class -> (state A, state B). Every B is reachable from A in place.
 CONVERGING = {
     "create objects in dependency order": (
@@ -122,7 +129,23 @@ CONVERGING = {
             "CREATE TABLE b (id UInt64, ts DateTime) ENGINE = MergeTree ORDER BY id",
         ],
     ),
-    "replace views and dictionaries, modify MV queries": (
+    "replace views and dictionaries": (
+        [
+            EVENTS,
+            "CREATE VIEW v AS SELECT id FROM events",
+            "CREATE DICTIONARY names (id UInt64, name String) PRIMARY KEY id "
+            "SOURCE(CLICKHOUSE(TABLE 'events' USER 'default')) "
+            "LAYOUT(FLAT()) LIFETIME(MIN 0 MAX 0)",
+        ],
+        [
+            EVENTS,
+            "CREATE VIEW v AS SELECT id, name FROM events WHERE v > 1",
+            "CREATE DICTIONARY names (id UInt64, name String DEFAULT '?') PRIMARY KEY id "
+            "SOURCE(CLICKHOUSE(TABLE 'events' USER 'default')) "
+            "LAYOUT(HASHED()) LIFETIME(MIN 0 MAX 300)",
+        ],
+    ),
+    MODIFY_MV_QUERIES: (
         [
             EVENTS,
             TOTALS,
@@ -130,10 +153,6 @@ CONVERGING = {
             "SELECT id, sum(v) AS s FROM events GROUP BY id",
             "CREATE MATERIALIZED VIEW mv_inner ENGINE = MergeTree ORDER BY id AS "
             "SELECT id FROM events",
-            "CREATE VIEW v AS SELECT id FROM events",
-            "CREATE DICTIONARY names (id UInt64, name String) PRIMARY KEY id "
-            "SOURCE(CLICKHOUSE(TABLE 'events' USER 'default')) "
-            "LAYOUT(FLAT()) LIFETIME(MIN 0 MAX 0)",
         ],
         [
             EVENTS,
@@ -142,10 +161,6 @@ CONVERGING = {
             "SELECT id, sum(v) * 2 AS s FROM events WHERE v > 0 GROUP BY id",
             "CREATE MATERIALIZED VIEW mv_inner ENGINE = MergeTree ORDER BY id AS "
             "SELECT id FROM events WHERE id > 10",
-            "CREATE VIEW v AS SELECT id, name FROM events WHERE v > 1",
-            "CREATE DICTIONARY names (id UInt64, name String DEFAULT '?') PRIMARY KEY id "
-            "SOURCE(CLICKHOUSE(TABLE 'events' USER 'default')) "
-            "LAYOUT(HASHED()) LIFETIME(MIN 0 MAX 300)",
         ],
     ),
     "replicated table (compared by engine family)": (
@@ -283,7 +298,17 @@ def _apply(cluster, tmp_path, sql):
     return path
 
 
-@pytest.mark.parametrize("case", list(CONVERGING))
+@pytest.mark.parametrize(
+    "case",
+    [
+        (
+            pytest.param(case, marks=NEEDS_MODIFY_QUERY)
+            if case == MODIFY_MV_QUERIES
+            else case
+        )
+        for case in CONVERGING
+    ],
+)
 def test_diff_then_migrate_converges(cluster, tmp_path, case):
     state_a, state_b = CONVERGING[case]
     schema, _ = _schema_file(cluster, tmp_path, state_b)
