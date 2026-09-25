@@ -15,6 +15,7 @@ from clickhouse_migrations.migrator import (
     STATUS_PRUNED,
     STATUS_UNKNOWN,
 )
+from tests.clickhouse_version import NEEDS_LOCK
 
 CLICKHOUSE_SERVERS = (
     "clickhouse01",
@@ -537,6 +538,7 @@ def _foreign_lock(cluster):
     return held
 
 
+@NEEDS_LOCK
 def test_lock(cluster, select_dir, monkeypatch, capsys, caplog):
     args = ("--lock", "--lock-timeout", "0", "--migrations-dir", str(select_dir))
     held = _foreign_lock(cluster)

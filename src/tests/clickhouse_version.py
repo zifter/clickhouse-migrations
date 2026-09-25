@@ -14,6 +14,15 @@ import pytest
 
 _VERSION = re.compile(r"\d+(?:\.\d+)*")
 
+# The migration lock needs KeeperMap with keeper_map_strict_mode: 23.3 has the
+# engine but not the setting ("Unknown setting keeper_map_strict_mode"), 23.8
+# has both. Keep in sync with LOCK_SERVER_REQUIREMENT in lock.py.
+LOCK_MIN_VERSION = "23.8"
+NEEDS_LOCK = pytest.mark.clickhouse_min_version(
+    LOCK_MIN_VERSION, reason="--lock needs KeeperMap with keeper_map_strict_mode"
+)
+
+
 def parse_version(text: str) -> Tuple[int, ...]:
     """``'25.7.4.11'`` -> ``(25, 7, 4, 11)``, ``'23.3'`` -> ``(23, 3)``."""
     match = _VERSION.match(text.strip())

@@ -5,6 +5,7 @@ import types
 from typing import Dict, List, Optional, Tuple
 
 import pytest
+from clickhouse_driver.errors import ServerException
 
 from clickhouse_migrations import lock as lock_module
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
@@ -37,8 +38,11 @@ class FakeKeeperMap(Connection):  # pylint: disable=too-many-instance-attributes
     raises, so a change of the SQL cannot silently pass the unit tests.
     """
 
-    def __init__(self, has_engine: bool = True, now: int = NOW):
+    def __init__(
+        self, has_engine: bool = True, now: int = NOW, has_strict_mode: bool = True
+    ):
         self.has_engine = has_engine
+        self.has_strict_mode = has_strict_mode
         self.now = now
         self.row: Optional[Dict] = None
         self.table_created = False
@@ -72,6 +76,9 @@ class FakeKeeperMap(Connection):  # pylint: disable=too-many-instance-attributes
             return
 
         if statement.startswith("INSERT"):
+            # A strict, synchronous insert: an asynchronous one (the server
+            # default on 26.3+) is batched and every concurrent writer wins.
+            assert "SETTINGS keeper_map_strict_mode = 1, async_insert = 0" in statement
             if self.on_insert is not None:
                 self.on_insert()
             if self.row is not None:
@@ -121,7 +128,13 @@ class FakeKeeperMap(Connection):  # pylint: disable=too-many-instance-attributes
     def query(self, statement: str) -> List[Dict]:
         self.statements.append(statement)
         if "system.table_engines" in statement:
-            return [{"n": 1 if self.has_engine else 0}]
+            assert "system.settings WHERE name = 'keeper_map_strict_mode'" in statement
+            return [
+                {
+                    "n": 1 if self.has_engine else 0,
+                    "strict": 1 if self.has_strict_mode else 0,
+                }
+            ]
 
         if "system.tables" in statement:
             return [{"n": 1 if self.table_created else 0}]
@@ -301,10 +314,23 @@ def test_timeout_names_the_owner_and_the_age(clock):
 
 
 @pytest.mark.usefixtures("clock")
-def test_timeout_without_a_visible_holder():
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError(NODE_EXISTS),
+        # clickhouse-driver against ClickHouse 23.8: no error name, no reason.
+        ServerException(
+            "Coordination::Exception. Coordination::Exception: Transaction "
+            "failed: Op #0, path: /keeper_map_tables/x/data/y. Stack trace:",
+            code=999,
+        ),
+    ],
+    ids=["node-exists", "code-999-without-reason"],
+)
+def test_timeout_without_a_visible_holder(error):
     conn = FakeKeeperMap()
     # The insert conflicts but the row is gone again by the time we look.
-    conn.fail = ("INSERT", RuntimeError(NODE_EXISTS))
+    conn.fail = ("INSERT", error)
     migration_lock = build_lock(conn, timeout=0)
 
     with pytest.raises(MigrationException, match="another migration run"):
@@ -408,9 +434,18 @@ def test_non_conflict_insert_error_is_reported():
 @pytest.mark.parametrize(
     "conn, reason",
     [
-        (FakeKeeperMap(has_engine=False), "KeeperMap table engine"),
+        (
+            FakeKeeperMap(has_engine=False),
+            "no KeeperMap table engine (ClickHouse 23.8+",
+        ),
+        # ClickHouse 23.3: the engine exists, the strict mode does not.
+        (
+            FakeKeeperMap(has_strict_mode=False),
+            "no keeper_map_strict_mode setting (ClickHouse 23.8+",
+        ),
         (broken_create(), "keeper_map_path_prefix"),
     ],
+    ids=["no-engine", "no-strict-mode", "no-path-prefix"],
 )
 def test_lock_fails_when_the_server_cannot_provide_it(conn, reason):
     # Locking is opt-in, so asking for it and not getting it is an error -
