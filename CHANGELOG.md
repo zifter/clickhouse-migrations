@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+**What's Changed:**
+- Fix `--lock` on servers with asynchronous inserts on (the server default on ClickHouse 26.3 and newer): concurrent inserts of the lock row were batched into one and every run was told it took the lock, so concurrent runs were not serialised. The lock row is now always inserted with `async_insert = 0` (it overrides the server default, a user profile and `--setting`). Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/111.
+- Fix `--lock` with `clickhouse-driver` on ClickHouse 23.8: a lock held by another run comes back as `Code: 999` without "Node exists" in the message and was reported as an error instead of being waited for; a conflict is now recognised by its error code as well. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/111.
+- Document the supported ClickHouse versions (README, "Supported ClickHouse versions"): the minimum is **23.3**; `--lock` needs 23.8+, and `diff` changing the query of a materialized view (`MODIFY QUERY`) needs 24.3+. A new CI job runs the whole suite against every LTS release from 23.3 to 26.8 and against the newest release (26.9), and the dev cluster's server version is configurable with `CLICKHOUSE_VERSION` (default unchanged, 25.7.4). Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/111.
+
+**Behaviour changes:**
+- `--lock` now fails up front, before any migration runs, on servers without the `keeper_map_strict_mode` setting (ClickHouse older than 23.8, e.g. 23.3, which has `KeeperMap` but not the setting), with a message naming the requirement; it used to fail on the first lock insert with `Unknown setting keeper_map_strict_mode`. The documented requirement for `--lock` goes from 22.9+ to 23.8+. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/111.
+
+
 ## [v0.15.0](https://github.com/zifter/clickhouse-migrations/tree/v0.15.0) (2026-09-25)
 
 [Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.14.0...v0.15.0)

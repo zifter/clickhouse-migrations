@@ -47,6 +47,30 @@ declared in `pyproject.toml`; raise the pins in `tox.ini` together with them.
 Integration tests live under `src/tests/integration/` and are auto-marked with
 the `integration` marker.
 
+### Against another ClickHouse version
+
+The dev cluster runs `clickhouse/clickhouse-server:25.7.4` by default; the
+`CLICKHOUSE_VERSION` environment variable picks another image tag (use an exact
+patch tag, e.g. `24.8.14`):
+
+```bash
+make docker-compose-down
+CLICKHOUSE_VERSION=24.8.14 make docker-compose-up-deamon
+tox -e py313
+make docker-compose-down && make docker-compose-up-deamon   # back to the default
+```
+
+CI does the same for every version listed in the `clickhouse` job of
+`.github/workflows/ci.yaml` (see "Supported ClickHouse versions" in the
+README), without coverage gates: coverage is only gated on the default version.
+A test that needs a newer server than the documented minimum (23.3) declares
+it with `@pytest.mark.clickhouse_min_version("24.3", reason="...")` (on the
+test, the class or a module-level `pytestmark`); it is skipped with that reason
+when `SELECT version()` reports an older server. `NEEDS_LOCK` in
+`src/tests/clickhouse_version.py` is that marker for everything that takes the
+migration lock (23.8+). When you add such a marker, state the requirement in
+the README too.
+
 The dev cluster (`dev/docker-compose.yaml`) is configured from
 `dev/CH-TEMPLATE`. It sets `<keeper_map_path_prefix>`
 (`dev/CH-TEMPLATE/config.d/keeper_map_path_prefix.xml`), which the server needs

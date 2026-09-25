@@ -91,6 +91,18 @@ pip install 'clickhouse-migrations[connect]'
 
 With `clickhouse-connect` the default port is `8123` (HTTP). `--db-url` works with both drivers (see [URL schemes](#url-schemes)).
 
+## Supported ClickHouse versions
+
+**Minimum: ClickHouse 23.3.** CI runs the whole suite (both drivers, a 4-node cluster) against every LTS release from 23.3 to 26.8 (23.3, 23.8, 24.3, 24.8, 25.3, 25.8, 26.3, 26.8), against 26.9 (the newest release) and against 25.7 (the default dev cluster, where coverage is measured). The exact tags are in the `clickhouse` job of [`ci.yaml`](.github/workflows/ci.yaml). Older servers are not supported: on 22.8, `diff` fails (`system.data_skipping_indices` has no `type_full` column) and there is no `KeeperMap` for `--lock`.
+
+Some features need a newer server than the minimum:
+
+Feature | Needs | On older servers
+--------|-------|-----------------
+`--lock` (`migrate`, `down`, `baseline`, `repair`) and `unlock` | ClickHouse **23.8+** with Keeper and `<keeper_map_path_prefix>` (see [Server requirements](#server-requirements)) | 23.3 has `KeeperMap` but not `keeper_map_strict_mode`, which the lock is built on: a run with `--lock` fails up front with an explicit message
+`diff` changing the query of a materialized view (`ALTER TABLE … MODIFY QUERY`) | ClickHouse **24.3+** | 23.8 refuses the generated statement (`Alter of type 'MODIFY_QUERY' is not supported by storage MaterializedView`); the rest of `diff` works from 23.3
+`dump` / `diff` output | the same server version on both sides | the text follows the server's formatting, which changes between versions: compare dumps taken from the same server version
+
 ## Migration files
 
 Migration files follow the naming convention `{VERSION}_{name}.sql`, e.g. `001_init.sql`, `002_add_users.sql`. Versions are plain integers applied in ascending order; [`new`](#creating-a-migration) picks the next one for you.
@@ -547,7 +559,7 @@ Statements come in **dependency order** (a view, materialized view or dictionary
 * Replay expects the target database to be the connection's default database (`--database` / `USE`): after normalisation references have no database prefix.
 * Database names inside string literals are never rewritten: `dictGet('db.dict', ...)`, `SOURCE(CLICKHOUSE(HOST ... DB 'db'))` (remote source), `Distributed` arguments given as anything but a plain string, dictionary `QUERY '...'` text, column comments. Such definitions still point at the original database after a replay into another one.
 * Secrets are masked by the server in `SHOW CREATE` (`[HIDDEN]`), so dictionaries or engines with passwords / keys will not replay as is.
-* The output follows the server's formatting, which differs between ClickHouse versions: compare dumps taken from the same server version (`--check` in CI against a fixed version). Tested on ClickHouse 25.7.
+* The output follows the server's formatting, which differs between ClickHouse versions: compare dumps taken from the same server version (`--check` in CI against a fixed version). Tested on ClickHouse 23.3 to 26.9 (see [Supported ClickHouse versions](#supported-clickhouse-versions)).
 * Only tables, views, materialized views and dictionaries are dumped (no users, roles, grants, functions or databases). Dependencies are per-object, so a dependency on an object of another database is not followed.
 * To turn a (hand-edited) schema file back into a migration, use [`diff`](#generating-a-migration-from-a-schema-file-diff).
 
@@ -617,7 +629,7 @@ The file starts like any `new` migration (`-- <name>` and `-- created: <date>`),
 
 From Python: `ClickhouseCluster(...).diff(schema_sql, db_name="mydb", allow_destructive=False)` returns the migration SQL (`""` when nothing changes); `diff_plan(schema_sql, db_name)` returns the structured result (`changes`, `refusals`, `notes`, `render()`), and `clickhouse_migrations.schema_diff.write_diff_migration(migrations_dir, sql, name="diff")` writes it as the next migration.
 
-**Known limitations:** the file is really created on the server for a moment, so engines with side effects (`Kafka`, `RabbitMQ`, `URL`, remote dictionaries, ...) are instantiated in the scratch database; `diff` compares the connected server only (run `ON CLUSTER` changes yourself: the generated statements have no `ON CLUSTER`, and a new argument-less `Replicated*` table needs `ON CLUSTER` or a `Replicated` database); a column TTL change combined with another change of the same column is not detected; references to other databases are compared as written. Tested on ClickHouse 25.7.
+**Known limitations:** the file is really created on the server for a moment, so engines with side effects (`Kafka`, `RabbitMQ`, `URL`, remote dictionaries, ...) are instantiated in the scratch database; `diff` compares the connected server only (run `ON CLUSTER` changes yourself: the generated statements have no `ON CLUSTER`, and a new argument-less `Replicated*` table needs `ON CLUSTER` or a `Replicated` database); a column TTL change combined with another change of the same column is not detected; references to other databases are compared as written; `MODIFY QUERY` of a materialized view needs ClickHouse 24.3+. Tested on ClickHouse 23.3 to 26.9 (see [Supported ClickHouse versions](#supported-clickhouse-versions)).
 
 ### In code
 ```python
@@ -733,7 +745,7 @@ CREATE TABLE IF NOT EXISTS schema_versions_lock (name String, owner String, acqu
 ENGINE = KeeperMap('/clickhouse-migrations/<database>') PRIMARY KEY name
 ```
 
-* The lock is a single row inserted with `keeper_map_strict_mode = 1`. `KeeperMap` is backed by Keeper/ZooKeeper and that setting turns the insert into a compare-and-set, so the second run **fails** instead of overwriting the row.
+* The lock is a single row inserted with `keeper_map_strict_mode = 1`. `KeeperMap` is backed by Keeper/ZooKeeper and that setting turns the insert into a compare-and-set, so the second run **fails** instead of overwriting the row. The insert is always synchronous (`async_insert = 0`, whatever the server or `--setting` says): asynchronous inserts, on by default in recent servers (26.3 and newer in CI), batch concurrent inserts into one and every run would think it won.
 * `owner` is `<hostname>:<pid>:<uuid>`, so the error message names the run that is holding the lock:
   `Could not take the migration lock on "mydb"."schema_versions_lock" within 300s: it is held by migrator-abc:1:…, which has held it for 42s.`
 * The lock is released in a `finally`, deleting **only** rows whose `owner` matches — a run never drops somebody else's lock, even after a failure or a `Ctrl-C`.
@@ -761,7 +773,7 @@ clickhouse-migrations unlock --db-name mydb
 
 #### Server requirements
 
-`KeeperMap` needs ClickHouse 22.9+, a Keeper/ZooKeeper ensemble **and** `<keeper_map_path_prefix>` in the server configuration:
+The lock needs ClickHouse 23.8+ (`KeeperMap` exists since 22.9, but the `keeper_map_strict_mode` setting the lock relies on is missing from 23.3), a Keeper/ZooKeeper ensemble **and** `<keeper_map_path_prefix>` in the server configuration:
 
 ```xml
 <clickhouse>
@@ -769,7 +781,7 @@ clickhouse-migrations unlock --db-name mydb
 </clickhouse>
 ```
 
-Without it the engine is disabled, and a run started with `--lock` fails with an explicit message instead of silently migrating unprotected. Drop `--lock` to run as before, knowing that concurrent runs are then unsafe.
+Without it the engine is disabled, and a run started with `--lock` fails with an explicit message instead of silently migrating unprotected (so does a run on a server older than 23.8). Drop `--lock` to run as before, knowing that concurrent runs are then unsafe.
 
 ### In CI (GitHub Action)
 
