@@ -9,6 +9,7 @@
 
 **Behaviour changes:**
 - `--lock` now fails up front, before any migration runs, on servers without the `keeper_map_strict_mode` setting (ClickHouse older than 23.8, e.g. 23.3, which has `KeeperMap` but not the setting), with a message naming the requirement; it used to fail on the first lock insert with `Unknown setting keeper_map_strict_mode`. The documented requirement for `--lock` goes from 22.9+ to 23.8+. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/111.
+- Drop Python 3.9 (EOL since October 2025); the last release supporting it is 0.15.x. pip on Python 3.9 keeps resolving 0.15.x because of `requires-python = ">=3.10, <4"`. The minimum-driver-versions CI job (`tox -e py310-mindeps`) now runs on Python 3.10 with the same pins (`clickhouse-driver==0.2.9`, `clickhouse-connect==0.7.9`). Closes #112.
 
 
 ## [v0.15.0](https://github.com/zifter/clickhouse-migrations/tree/v0.15.0) (2026-09-25)

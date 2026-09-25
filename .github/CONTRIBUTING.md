@@ -15,7 +15,7 @@ approach before you invest time.
 
 ## Development setup
 
-Requirements: Python 3.9+, Docker (for the integration tests), and `make`.
+Requirements: Python 3.10+, Docker (for the integration tests), and `make`.
 
 ```bash
 # Install the tooling (tox)
@@ -40,7 +40,7 @@ make test            # runs tox: linters + tests + coverage
 make docker-compose-down
 ```
 
-`tox -e py39-mindeps` (needs Python 3.9 and the running cluster) runs the full
+`tox -e py310-mindeps` (needs Python 3.10 and the running cluster) runs the full
 suite against the minimum `clickhouse-driver` / `clickhouse-connect` versions
 declared in `pyproject.toml`; raise the pins in `tox.ini` together with them.
 
