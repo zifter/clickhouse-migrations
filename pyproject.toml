@@ -67,6 +67,7 @@ packages = [
 [tool.pytest.ini_options]
 markers = [
     "integration: tests that require a running ClickHouse instance",
+    "clickhouse_min_version(minimum, reason): skip on ClickHouse servers older than minimum",
 ]
 
 [tool.isort]

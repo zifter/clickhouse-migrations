@@ -100,3 +100,71 @@ jobs:
       - name: Stop
         if: always()
         run: make docker-compose-down
+
+  # The whole suite (unit + integration) against other ClickHouse server
+  # versions: the newest stable release and every LTS release down to the
+  # documented minimum, 23.3 (see "Supported ClickHouse versions" in the
+  # README). The dev cluster takes the image tag from CLICKHOUSE_VERSION
+  # (dev/docker-compose.yaml).
+  # There are no coverage gates here, for the same reason as in `mindeps`:
+  # tests that need a newer server skip themselves based on `SELECT version()`,
+  # so per-version coverage legitimately differs. The `test` jobs above run the
+  # default version (25.7.4) and gate coverage.
+  clickhouse:
+    name: clickhouse ${{ matrix.clickhouse }} - py3.13 - ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        clickhouse:
+          - "26.9.1"
+          - "26.8.10"
+          - "26.3.33"
+          - "25.8.33"
+          - "25.3.14"
+          - "24.8.14"
+          - "24.3.18"
+          - "23.8.16"
+          - "23.3.22"
+    env:
+      CLICKHOUSE_VERSION: ${{ matrix.clickhouse }}
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+        with:
+          # setuptools-scm derives the version from git tags/history
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.13"
+
+      - uses: KengoTODA/actions-setup-docker-compose@v1
+        with:
+          version: '2.14.2' # the full version of `docker-compose` command
+
+      - name: Docker compose up
+        run: make docker-compose-up-deamon
+
+      - name: Setup
+        run: make setup
+
+      - name: Wait for the servers
+        run: |
+          for node in clickhouse01 clickhouse02 clickhouse03 clickhouse04; do
+            for attempt in $(seq 60); do
+              docker exec "$node" clickhouse-client --query "SELECT 1" >/dev/null 2>&1 && break
+              [ "$attempt" = 60 ] && { docker logs --tail 50 "$node"; exit 1; }
+              sleep 2
+            done
+          done
+          docker exec clickhouse01 clickhouse-client --query "SELECT version()"
+
+      - name: Test against ClickHouse ${{ matrix.clickhouse }}
+        run: tox -e py313 -- -rfEs
+
+      - name: Stop
+        if: always()
+        run: make docker-compose-down
