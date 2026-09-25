@@ -873,31 +873,33 @@ class ClickhouseCluster:  # pylint: disable=too-many-instance-attributes
             yield None
             return
 
-        with self.connection(db_name) as lock_conn:
+        with (
+            self.connection(db_name) as lock_conn,
             # The heartbeat refreshes the lock from its own thread: a client
             # must not be shared between threads.
-            with self.connection(db_name) as heartbeat_conn:
-                migration_lock = self._lock(lock_conn, db_name, lock_timeout, lock_ttl)
-                heartbeat = LockHeartbeat(
-                    migration_lock.bound_to(heartbeat_conn), heartbeat_interval
-                )
-                migration_lock.acquire()
+            self.connection(db_name) as heartbeat_conn,
+        ):
+            migration_lock = self._lock(lock_conn, db_name, lock_timeout, lock_ttl)
+            heartbeat = LockHeartbeat(
+                migration_lock.bound_to(heartbeat_conn), heartbeat_interval
+            )
+            migration_lock.acquire()
+            try:
+                heartbeat.start()
+                yield migration_lock
+            finally:
+                # Also covers a failing migration and KeyboardInterrupt: a
+                # lock we never took is never released, and only our own
+                # row goes. The heartbeat stops first so it cannot refresh
+                # a released lock, and a failure to stop it never prevents
+                # the release.
                 try:
-                    heartbeat.start()
-                    yield migration_lock
-                finally:
-                    # Also covers a failing migration and KeyboardInterrupt: a
-                    # lock we never took is never released, and only our own
-                    # row goes. The heartbeat stops first so it cannot refresh
-                    # a released lock, and a failure to stop it never prevents
-                    # the release.
-                    try:
-                        heartbeat.stop()
-                    except Exception as exc:  # pylint: disable=broad-exception-caught
-                        logging.warning(
-                            "Failed to stop the migration lock heartbeat: %s", exc
-                        )
-                    migration_lock.release()
+                    heartbeat.stop()
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logging.warning(
+                        "Failed to stop the migration lock heartbeat: %s", exc
+                    )
+                migration_lock.release()
 
     def force_unlock(self, db_name: Optional[str] = None) -> Optional[LockHolder]:
         """Force-release the migration lock of a database ("unlock")."""

@@ -25,7 +25,6 @@ jobs:
           - "3.12"
           - "3.11"
           - "3.10"
-          - "3.9"
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
@@ -64,12 +63,12 @@ jobs:
         run: make docker-compose-down
 
   # The whole suite against the lowest driver versions pyproject.toml accepts
-  # (tox -e py39-mindeps), on the lowest supported Python: old driver wheels do
+  # (tox -e py310-mindeps), on the lowest supported Python: old driver wheels do
   # not exist for new Pythons. It checks compatibility only, so there are no
   # coverage gates here: the code has no driver-version branches, and the
   # `test` jobs above already gate coverage per Python version.
   mindeps:
-    name: min driver versions - py3.9 - ubuntu
+    name: min driver versions - py3.10 - ubuntu
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -82,7 +81,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v2
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - uses: KengoTODA/actions-setup-docker-compose@v1
         with:
@@ -95,7 +94,7 @@ jobs:
         run: make setup
 
       - name: Test with the minimum driver versions
-        run: tox -e py39-mindeps
+        run: tox -e py310-mindeps
 
       - name: Stop
         if: always()

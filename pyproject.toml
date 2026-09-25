@@ -10,7 +10,7 @@ urls.Source = "https://github.com/zifter/clickhouse-migrations"
 urls.Tracker = "https://github.com/zifter/clickhouse-migrations/issues"
 urls.Changelog = "https://github.com/zifter/clickhouse-migrations/blob/main/CHANGELOG.md"
 
-requires-python = ">=3.9, <4"
+requires-python = ">=3.10, <4"
 keywords = [
     "clickhouse",
     "migrations",
@@ -27,7 +27,6 @@ license = {text = "MIT"}
 classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

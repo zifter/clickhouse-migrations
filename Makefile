@@ -4,13 +4,12 @@ setup:
 
 .PHONY: setup-dev
 setup-dev:
-	pyenv install -s 3.9.9
 	pyenv install -s 3.10.7
 	pyenv install -s 3.11.0
 	pyenv install -s 3.12.0
 	pyenv install -s 3.13.0
 	pyenv install -s 3.14.0
-	pyenv local 3.9.9 3.10.7 3.11.0 3.12.0 3.13.0 3.14.0
+	pyenv local 3.10.7 3.11.0 3.12.0 3.13.0 3.14.0
 	python3 -m pip install tox==4.8.0
 
 .PHONY: test
