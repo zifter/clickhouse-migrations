@@ -9,6 +9,7 @@ from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.command_line import main
 from clickhouse_migrations.exceptions import MigrationException
+from tests.clickhouse_version import NEEDS_LOCK
 
 DRIVER = "clickhouse-driver"
 CONNECT = "clickhouse-connect"
@@ -115,6 +116,7 @@ def test_settings_env_var_reaches_the_server(monkeypatch, tmp_path, cluster):
         assert conn.query("SELECT max_threads FROM seen") == [{"max_threads": 2}]
 
 
+@NEEDS_LOCK
 @pytest.mark.parametrize("target", TARGETS)
 def test_setting_reaches_every_statement_of_every_subcommand(
     monkeypatch, tmp_path, cluster, target

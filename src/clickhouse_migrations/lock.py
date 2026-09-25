@@ -10,6 +10,11 @@ makes it a usable mutex:
   ``keeper_map_strict_mode = 1``. Without that setting an insert of an existing
   key silently **overwrites** it; with it the second writer fails with a Keeper
   "Node exists" transaction error, which is exactly the compare-and-set we need.
+  The insert also sets ``async_insert = 0``: asynchronous inserts are on by
+  default in recent servers (26.3 and newer; 25.7 still has them off), and an
+  asynchronous insert is batched with the concurrent ones into one block, rows
+  with the same key collapse into a single Keeper ``create`` and every writer
+  is told it succeeded.
 * release: delete only rows whose ``owner`` matches ours, so a run can never
   drop somebody else's lock.
 * stale takeover: a lock older than the TTL is deleted with a
@@ -66,6 +71,12 @@ HEARTBEAT_TTL_DIVISOR = 3
 HEARTBEAT_MIN_INTERVAL = 1.0
 # How long releasing the lock waits for a refresh that is still in flight.
 HEARTBEAT_JOIN_TIMEOUT = 5.0
+# The oldest server the lock is tested on: KeeperMap appeared in 22.9, but
+# keeper_map_strict_mode is missing from 23.3 and present in 23.8.
+LOCK_SERVER_REQUIREMENT = "ClickHouse 23.8+ backed by Keeper/ZooKeeper"
+# ClickHouse error code of KEEPER_EXCEPTION, e.g. a strict insert of a key that
+# already exists.
+KEEPER_EXCEPTION_CODE = 999
 
 # Current holder of the lock. ``age`` is computed by the server, so it does not
 # depend on the clock of the machine running the migration.
@@ -83,9 +94,19 @@ def heartbeat_interval(ttl: float) -> float:
 
 
 def _is_conflict(exc: Exception) -> bool:
-    """Whether a failed insert means "somebody else holds the lock"."""
+    """Whether a failed insert means "somebody else holds the lock".
+
+    The server reports the conflict as a ``KEEPER_EXCEPTION``: clickhouse-connect
+    has the error name in the message, clickhouse-driver only has the numeric
+    ``code``, and servers before 24.x leave "(Node exists)" out of the message
+    (``Transaction failed: Op #0, path: ...``).
+    """
     text = str(exc)
-    return "Node exists" in text or "KEEPER_EXCEPTION" in text
+    return (
+        "Node exists" in text
+        or "KEEPER_EXCEPTION" in text
+        or getattr(exc, "code", None) == KEEPER_EXCEPTION_CODE
+    )
 
 
 class KeeperMapLock:  # pylint: disable=too-many-instance-attributes
@@ -158,17 +179,28 @@ class KeeperMapLock:  # pylint: disable=too-many-instance-attributes
     def unsupported_reason(self) -> Optional[str]:
         """Why locking is unavailable here, or None when it works.
 
-        The probe both checks the engine and creates the table: KeeperMap is
-        also disabled when the server has no ``<keeper_map_path_prefix>``, which
-        only shows up on the CREATE.
+        The probe checks the engine and the ``keeper_map_strict_mode`` setting
+        (the compare-and-set the lock is built on; 23.3 has the engine but not
+        the setting) and creates the table: KeeperMap is also disabled when the
+        server has no ``<keeper_map_path_prefix>``, which only shows up on the
+        CREATE.
         """
         rows = self._conn.query(
-            "SELECT count() AS n FROM system.table_engines WHERE name = 'KeeperMap'"
+            "SELECT (SELECT count() FROM system.table_engines "
+            "WHERE name = 'KeeperMap') AS n, "
+            "(SELECT count() FROM system.settings "
+            "WHERE name = 'keeper_map_strict_mode') AS strict"
         )
         if not rows[0]["n"]:
             return (
                 "this server has no KeeperMap table engine "
-                "(ClickHouse 22.9+ backed by Keeper/ZooKeeper is required)"
+                f"({LOCK_SERVER_REQUIREMENT} is required)"
+            )
+
+        if not rows[0]["strict"]:
+            return (
+                "this server has no keeper_map_strict_mode setting "
+                f"({LOCK_SERVER_REQUIREMENT} is required)"
             )
 
         try:
@@ -226,8 +258,11 @@ class KeeperMapLock:  # pylint: disable=too-many-instance-attributes
 
     def _try_acquire(self) -> bool:
         try:
+            # async_insert = 0: see the module docstring, an asynchronous
+            # insert lets every concurrent writer "win".
             self._conn.command(
-                f"INSERT INTO {self._table} SETTINGS keeper_map_strict_mode = 1 "
+                f"INSERT INTO {self._table} "
+                "SETTINGS keeper_map_strict_mode = 1, async_insert = 0 "
                 f"VALUES ({quote_string(LOCK_NAME)}, "
                 f"{quote_string(self._owner)}, now())"
             )

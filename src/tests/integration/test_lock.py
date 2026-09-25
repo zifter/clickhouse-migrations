@@ -16,6 +16,9 @@ from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.command_line import main
 from clickhouse_migrations.exceptions import MigrationException
 from clickhouse_migrations.lock import KeeperMapLock
+from tests.clickhouse_version import NEEDS_LOCK
+
+pytestmark = NEEDS_LOCK
 
 TESTS_DIR = Path(__file__).parents[1]
 MIGRATIONS = TESTS_DIR / "migrations"
@@ -40,11 +43,15 @@ SLOW_MIGRATIONS = {
 # file barrier, so they really do start migrating at the same time instead of
 # hoping that a sleep lines them up.
 CHILD = """
-import json, os, sys, time
+import json, logging, os, sys, time
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 
 migrations_dir, barrier_dir, worker, lock = sys.argv[1:5]
 total = int(sys.argv[5])
+# The log (who took the lock when) goes to stderr: failures show it.
+logging.basicConfig(
+    level=logging.INFO, stream=sys.stderr, format=f"%(asctime)s {worker} %(message)s"
+)
 
 (open(os.path.join(barrier_dir, worker), "w")).close()
 deadline = time.time() + 120
@@ -118,7 +125,9 @@ def run_concurrently(migrations_dir, tmp_path, workers=4, lock="on"):
     for process in processes:
         stdout, stderr = process.communicate(timeout=300)
         assert process.returncode == 0, stderr
-        results.append(json.loads(stdout.strip().splitlines()[-1]))
+        result = json.loads(stdout.strip().splitlines()[-1])
+        result["log"] = stderr
+        results.append(result)
 
     return results
 
@@ -168,16 +177,74 @@ def test_concurrent_migrations_are_applied_exactly_once(
     cluster, slow_migrations, tmp_path
 ):
     results = run_concurrently(slow_migrations, tmp_path, workers=4)
+    logs = "".join(sorted(r["log"] for r in results))
 
-    assert not [r for r in results if "error" in r], results
+    assert not [r for r in results if "error" in r], logs
     # The lock serialises the runs: whoever gets in first applies everything,
     # the others find nothing left to do.
     applied = sorted(len(r["applied"]) for r in results)
-    assert applied == [0, 0, 0, 3], results
+    assert applied == [0, 0, 0, 3], logs
     # Without the lock every worker would insert its own bookkeeping rows.
     assert schema_version_rows(cluster) == [(1, 1), (2, 1), (3, 1)]
     assert {"conc_one", "conc_two", "conc_three"} <= set(cluster.show_tables("pytest"))
     assert current_holder(cluster) is None
+
+
+def race_for_the_lock(racer, workers):
+    """``workers`` threads try to take the lock at the same moment, each over
+    its own connection; returns the owners that were told they took it."""
+    start = threading.Barrier(workers)
+    finished = threading.Barrier(workers)
+    won = {}
+
+    def attempt(index):
+        with racer.connection("pytest") as conn:
+            lock = KeeperMapLock(conn, "pytest", timeout=0, owner=f"racer-{index}")
+            start.wait(timeout=60)
+            try:
+                won[lock.owner] = lock.acquire()
+            except MigrationException:
+                won[lock.owner] = False
+            # Nobody releases before everybody has tried: a late attempt must
+            # not win a lock that was already given back.
+            finished.wait(timeout=60)
+            if won[lock.owner]:
+                lock.release()
+
+    threads = [threading.Thread(target=attempt, args=(i,)) for i in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+
+    assert len(won) == workers
+    return sorted(owner for owner, took in won.items() if took)
+
+
+@pytest.mark.parametrize(
+    "driver, port", [("clickhouse-driver", "9000"), ("clickhouse-connect", "8123")]
+)
+def test_concurrent_acquire_has_one_winner_with_async_inserts_on(driver, port, cluster):
+    # Asynchronous inserts (on by default on 26.3+, forced on here so every
+    # server version runs this) batch concurrent inserts of the lock row into
+    # one block, and every writer would be told it took the lock. The lock's
+    # own insert overrides the setting with async_insert = 0.
+    racer = ClickhouseCluster(
+        db_host="localhost",
+        db_user="default",
+        db_password="",
+        db_port=port,
+        driver=driver,
+        settings={"async_insert": "1", "wait_for_async_insert": "1"},
+    )
+    with cluster.connection("pytest") as conn:
+        # Create the lock table up front, so the racers start level.
+        assert KeeperMapLock(conn, "pytest").unsupported_reason() is None
+
+    for _ in range(5):
+        winners = race_for_the_lock(racer, workers=4)
+        assert len(winners) == 1, winners
+        assert current_holder(cluster) is None
 
 
 def test_timeout_names_the_owner_and_how_long_it_held_the_lock(cluster):
