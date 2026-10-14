@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [v0.16.0](https://github.com/zifter/clickhouse-migrations/tree/v0.16.0) (2026-10-14)
+
+[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.15.0...v0.16.0)
+
 **What's Changed:**
 - Fix `--lock` on servers with asynchronous inserts on (the server default on ClickHouse 26.3 and newer): concurrent inserts of the lock row were batched into one and every run was told it took the lock, so concurrent runs were not serialised. The lock row is now always inserted with `async_insert = 0` (it overrides the server default, a user profile and `--setting`). Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/111.
 - Fix `--lock` with `clickhouse-driver` on ClickHouse 23.8: a lock held by another run comes back as `Code: 999` without "Node exists" in the message and was reported as an error instead of being waited for; a conflict is now recognised by its error code as well. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/111.
