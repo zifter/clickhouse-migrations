@@ -234,7 +234,7 @@ def test_lock_table_follows_custom_migrations_table():
     migration_lock.acquire()
 
     assert (
-        "ENGINE = KeeperMap('/clickhouse-migrations/meta/my_versions')"
+        "ENGINE = KeeperMap('/clickhouse-migrations/meta@my_versions')"
         in conn.statements[1]
     )
 
@@ -244,6 +244,18 @@ def test_keeper_path_escapes_odd_database_names():
     KeeperMapLock(conn, "we/ird db").acquire()
 
     assert "KeeperMap('/clickhouse-migrations/we%2Fird%20db')" in conn.statements[1]
+
+
+def test_keeper_path_of_a_custom_table_is_a_sibling_that_cannot_be_forged():
+    custom = FakeKeeperMap()
+    KeeperMapLock(custom, "pytest", migrations_table="my@versions").acquire()
+    assert "KeeperMap('/clickhouse-migrations/pytest@my%40versions')" in (
+        custom.statements[1]
+    )
+
+    odd_db = FakeKeeperMap()
+    KeeperMapLock(odd_db, "pytest@my").acquire()
+    assert "KeeperMap('/clickhouse-migrations/pytest%40my')" in odd_db.statements[1]
 
 
 def test_acquire_and_release_round_trip():

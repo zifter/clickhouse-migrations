@@ -140,13 +140,16 @@ class KeeperMapLock:  # pylint: disable=too-many-instance-attributes
         """Keeper path of the lock table, unique per database.
 
         Every component is URL-escaped so a database name containing a slash or
-        a quote cannot reshape the path. A customised bookkeeping table adds one
-        more component, so two tools migrating the same database with different
-        bookkeeping tables take two different locks.
+        a quote cannot reshape the path. A customised bookkeeping table is
+        appended after an ``@`` (escaped in names, so it cannot be forged), so
+        two tools migrating the same database with different bookkeeping tables
+        take two different locks. The two paths are siblings rather than nested:
+        dropping a KeeperMap table removes its Keeper nodes recursively, and a
+        lock nested under another one would be wiped along with it.
         """
         path = f"{KEEPER_PATH_PREFIX}/{urlquote(lock_db or '', safe='')}"
         if table_name != MIGRATIONS_TABLE_DEFAULT_NAME:
-            path += f"/{urlquote(table_name, safe='')}"
+            path += f"@{urlquote(table_name, safe='')}"
 
         return path
 
