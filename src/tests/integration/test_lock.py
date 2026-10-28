@@ -404,6 +404,27 @@ def test_lock_follows_a_custom_migrations_table(cluster):
             custom.migrate("pytest", MIGRATIONS, lock=True, lock_timeout=0)
 
 
+@pytest.mark.parametrize(
+    "dropped, kept",
+    [("schema_versions", "my_versions"), ("my_versions", "schema_versions")],
+)
+def test_dropping_one_lock_table_keeps_the_other_working(cluster, dropped, kept):
+    # Two bookkeeping tables in one database have two lock tables; their Keeper
+    # paths must not be nested, or dropping one wipes the other's Keeper nodes.
+    with foreign_lock(cluster, migrations_table=kept):
+        with foreign_lock(cluster, migrations_table=dropped):
+            pass
+        with cluster.connection("pytest") as conn:
+            conn.execute(f'DROP TABLE "pytest"."{dropped}_lock" SYNC')
+
+        assert current_holder(cluster, migrations_table=kept).owner == OTHER_OWNER
+    assert current_holder(cluster, migrations_table=kept) is None
+
+    # The dropped lock table can be created again and taken.
+    with foreign_lock(cluster, migrations_table=dropped):
+        assert current_holder(cluster, migrations_table=dropped).owner == OTHER_OWNER
+
+
 def test_rollback_takes_the_lock(cluster):
     cluster.migrate("pytest", DOWN_MIGRATIONS, lock=True, lock_timeout=0)
 
