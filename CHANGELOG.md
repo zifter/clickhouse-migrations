@@ -2,8 +2,14 @@
 
 ## [Unreleased]
 
+## [v0.16.1](https://github.com/zifter/clickhouse-migrations/tree/v0.16.1) (2026-10-29)
+
+[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.16.0...v0.16.1)
+
 **What's Changed:**
 - Fix `--lock` with a custom `--migrations-table`: its Keeper path (`/clickhouse-migrations/<database>/<table>`) was nested under the default lock's path (`/clickhouse-migrations/<database>`), and on ClickHouse 26.3 and newer dropping one of the two lock tables (e.g. `DROP DATABASE`) wiped the other one's Keeper nodes, after which that lock table could no longer be created (`Transaction failed (No node)`). The custom-table lock now lives at the sibling path `/clickhouse-migrations/<database>@<table>`. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/117.
+- GitHub Action: `action.yml` sets up Python with `actions/setup-python@v7` (was v5). Done by @dependabot in https://github.com/zifter/clickhouse-migrations/pull/119.
+- Internal: Dependabot keeps pip dependencies, GitHub Actions and the Docker base image up to date (weekly, grouped); CI actions, the release workflows, `pytest` (9.1.1) and `pytest-cov` (7.1.0) are bumped. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/115 and by @dependabot in https://github.com/zifter/clickhouse-migrations/pull/116, https://github.com/zifter/clickhouse-migrations/pull/118, https://github.com/zifter/clickhouse-migrations/pull/119.
 
 **Behaviour changes:**
 - With a non-default `--migrations-table`, a lock table created from now on gets the new Keeper path. A lock table that already exists keeps its path (it is created with `IF NOT EXISTS`), so old and new versions keep sharing one lock during an upgrade. To move an existing one to the new path, drop `<migrations table>_lock` while no migration is running; the next `--lock` run recreates it. The default `schema_versions` lock is unchanged. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/117.
