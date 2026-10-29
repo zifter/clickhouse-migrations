@@ -106,3 +106,43 @@ migrations directory.
 5. Open the PR against `main` with a clear description of the change and why.
 
 Versioning and releases are handled by the maintainer via GitHub Releases.
+
+## Releasing
+
+The package version comes from the git tag (`setuptools-scm`), so there is no
+version to bump in the code. A release is cut from `main`:
+
+1. **Changelog PR.** Open a PR "CHANGELOG: add the vX.Y.Z entry" that turns
+   `## [Unreleased]` into
+   `## [vX.Y.Z](https://github.com/zifter/clickhouse-migrations/tree/vX.Y.Z) (YYYY-MM-DD)`
+   followed by
+   `[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/vPREV...vX.Y.Z)`,
+   and leaves an empty `## [Unreleased]` above it. Behaviour changes go in a
+   separate `**Behaviour changes:**` block. Merge it once CI is green.
+2. **GitHub release.** When CI on `main` is green for the merge commit, create
+   the release on that commit, using the new changelog entry as the notes
+   (`--target` needs the full SHA):
+
+   ```bash
+   gh release create vX.Y.Z --target <full merge sha> --title vX.Y.Z --notes-file notes.md
+   ```
+
+   Publishing the release runs two workflows: `publish`
+   ([`publish-to-pypi.yaml`](workflows/publish-to-pypi.yaml), PyPI via Trusted
+   Publishing, no secrets) and `docker`
+   ([`docker-publish.yml`](workflows/docker-publish.yml), GHCR `:X.Y.Z` and
+   `:latest`). Both must succeed.
+3. **Verify.** PyPI shows the new version
+   (`pip install clickhouse-migrations==X.Y.Z` may fail for about a minute
+   after the upload because of CDN lag; retry) and
+   `ghcr.io/zifter/clickhouse-migrations:X.Y.Z` exists.
+4. **Move the Action tag.** `uses: zifter/clickhouse-migrations@v1` resolves to
+   the `v1` tag, so action users stay on the old `action.yml` until it is moved:
+
+   ```bash
+   git fetch --tags
+   git tag -f v1 vX.Y.Z
+   git push -f origin refs/tags/v1
+   ```
+
+5. **Close** the release's milestone and tracker issue, if there are any.
