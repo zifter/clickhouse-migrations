@@ -14,13 +14,13 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # setuptools-scm derives the package version from the release tag
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
