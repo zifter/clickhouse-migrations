@@ -34,6 +34,7 @@ class _BookkeepingConn:
         self.rows = dict(rows or {})
         self.commands = []
         self.inserts = []
+        self.insert_settings = []
 
     def query(self, statement):
         if "count()" in statement:
@@ -43,8 +44,9 @@ class _BookkeepingConn:
             for v, md5 in sorted(self.rows.items())
         ]
 
-    def insert(self, table, rows):
+    def insert(self, table, rows, settings=None):
         self.inserts.append((table, rows))
+        self.insert_settings.append(settings)
         for row in rows:
             self.rows[row["version"]] = row["md5"]
 
@@ -92,6 +94,7 @@ def test_baseline_records_in_one_insert_without_executing():
         {"version": 1, "script": "SELECT 1;", "md5": "a"},
         {"version": 2, "script": "SELECT 2;", "md5": "b"},
     ]
+    assert conn.insert_settings[0]["insert_deduplication_token"]
 
 
 def test_baseline_dry_run_writes_nothing():

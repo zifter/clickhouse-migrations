@@ -26,7 +26,7 @@ class _FakeConn:
     def command(self, statement):
         self.commands.append(statement)
 
-    def insert(self, _table, _rows):
+    def insert(self, _table, _rows, **_kwargs):
         self.commands.append("INSERT")
 
     def query(self, _query):
@@ -327,6 +327,7 @@ class _RecordingConn:
     def __init__(self, rows=None):
         self.commands = []
         self.inserts = []
+        self.insert_settings = []
         self.queries = []
         self._rows = rows or []
 
@@ -337,8 +338,9 @@ class _RecordingConn:
         self.queries.append(statement)
         return self._rows
 
-    def insert(self, table, rows):
+    def insert(self, table, rows, settings=None):
         self.inserts.append((table, rows))
+        self.insert_settings.append(settings)
 
 
 class _FailingConn(_RecordingConn):
@@ -451,6 +453,22 @@ def test_fake_migration_deletes_from_the_custom_table():
         for c in conn.commands
     )
     assert conn.inserts[0][0] == '"meta"."my_versions"'
+
+
+@pytest.mark.parametrize("fake", [False, True])
+def test_schema_version_inserts_carry_a_unique_dedup_token(fake):
+    # Issue #122: re-recording a migration inserts the same row again, so each
+    # insert needs its own deduplication token or ClickHouse drops it.
+    conn = _RecordingConn()
+    migration = Migration(version=1, md5="a", script="SELECT 1")
+
+    Migrator(conn).apply_migration([migration], True, fake=fake)
+    Migrator(conn).apply_migration([migration], True, fake=fake)
+
+    tokens = [s["insert_deduplication_token"] for s in conn.insert_settings]
+    assert len(tokens) == 2
+    assert all(tokens)
+    assert tokens[0] != tokens[1]
 
 
 def _migs(*versions):

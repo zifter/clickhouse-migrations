@@ -30,7 +30,7 @@ class _Conn:
         self.commands.append(statement)
         self.logged_as.append(log_statement)
 
-    def insert(self, _table, rows):
+    def insert(self, _table, rows, **_kwargs):
         self.inserts.extend(rows)
 
     def query(self, _query):

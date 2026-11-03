@@ -150,7 +150,9 @@ class FakeKeeperMap(Connection):  # pylint: disable=too-many-instance-attributes
             }
         ]
 
-    def insert(self, table: str, rows: List[Dict]) -> None:
+    def insert(
+        self, table: str, rows: List[Dict], settings: Optional[Dict] = None
+    ) -> None:
         raise AssertionError("the lock never uses the insert() API")
 
     def __enter__(self) -> "FakeKeeperMap":
