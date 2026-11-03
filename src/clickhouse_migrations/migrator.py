@@ -1,5 +1,6 @@
 import logging
 import re
+import uuid
 from collections import namedtuple
 from typing import Dict, List, Mapping, Optional, Set, Tuple
 
@@ -669,6 +670,12 @@ ORDER BY tuple(created_at)"""
         self._insert_schema_versions([migration])
 
     def _insert_schema_versions(self, migrations: List[Migration]) -> None:
+        # A unique deduplication token per insert: re-recording a migration
+        # after `down` (or in fake mode) inserts the very same row that was
+        # deleted, and a Replicated*/deduplicating table would otherwise drop
+        # it as a duplicate of the first insert. On 26.x the block hash no
+        # longer covers the `created_at DEFAULT now()` value, so the row was
+        # silently lost there (issue #122). The setting exists since 22.2.
         self._conn.insert(
             self._table,
             [
@@ -679,6 +686,7 @@ ORDER BY tuple(created_at)"""
                 }
                 for migration in migrations
             ],
+            settings={"insert_deduplication_token": uuid.uuid4().hex},
         )
 
     def optimize_schema_table(self):

@@ -177,8 +177,14 @@ class Connection(ABC):
         raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
-    def insert(self, table: str, rows: List[Dict]) -> None:
-        """Insert a list of row dicts into a table."""
+    def insert(
+        self, table: str, rows: List[Dict], settings: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Insert a list of row dicts into a table.
+
+        ``settings`` are ClickHouse settings for this insert only, on top of
+        the connection's own.
+        """
         raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
@@ -206,10 +212,14 @@ class ClickhouseDriverConnection(Connection):
         names = [c[0] for c in columns]
         return [dict(zip(names, row)) for row in data]
 
-    def insert(self, table: str, rows: List[Dict]) -> None:
+    def insert(
+        self, table: str, rows: List[Dict], settings: Optional[Dict[str, Any]] = None
+    ) -> None:
         columns = list(rows[0].keys())
         column_list = ", ".join(columns)
-        self._client.execute(f"INSERT INTO {table} ({column_list}) VALUES", rows)
+        self._client.execute(
+            f"INSERT INTO {table} ({column_list}) VALUES", rows, settings=settings
+        )
 
     # Passthrough kept so existing tests and callers can use the native client
     # API directly against a clickhouse-driver connection.
@@ -239,10 +249,12 @@ class ClickhouseConnectConnection(Connection):
         result = self._client.query(statement)
         return [dict(zip(result.column_names, row)) for row in result.result_rows]
 
-    def insert(self, table: str, rows: List[Dict]) -> None:
+    def insert(
+        self, table: str, rows: List[Dict], settings: Optional[Dict[str, Any]] = None
+    ) -> None:
         columns = list(rows[0].keys())
         data = [[row[column] for column in columns] for row in rows]
-        self._client.insert(table, data=data, column_names=columns)
+        self._client.insert(table, data=data, column_names=columns, settings=settings)
 
     def __enter__(self) -> "ClickhouseConnectConnection":
         return self

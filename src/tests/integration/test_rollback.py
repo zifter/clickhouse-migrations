@@ -1,12 +1,15 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 from clickhouse_migrations.clickhouse_cluster import ClickhouseCluster
 from clickhouse_migrations.command_line import main
 from clickhouse_migrations.migrator import STATUS_APPLIED, STATUS_PENDING
 
 TESTS_DIR = Path(__file__).parents[1]
 DOWN_MIGRATIONS = TESTS_DIR / "down_migrations"
+CLUSTER_NAME = "company_cluster"
 
 
 def _states(cluster: ClickhouseCluster):
@@ -83,3 +86,30 @@ def test_main_down_subcommand(cluster: ClickhouseCluster, monkeypatch):
 
     assert main() == 0
     assert "sample_b" not in cluster.show_tables("pytest")
+
+
+@pytest.mark.parametrize("driver", ["clickhouse-driver", "clickhouse-connect"])
+def test_migrate_after_rollback_on_cluster_records_the_migration(_schema, driver):
+    # Issue #122: with --cluster-name the migrations table is a
+    # ReplicatedMergeTree. `down` deletes the row of version 2 and the next
+    # `migrate` inserts the very same row again; ClickHouse 26.x dropped that
+    # insert as a duplicate of the first one, so version 2 stayed pending.
+    cluster = ClickhouseCluster(
+        db_host="localhost",
+        db_user="default",
+        db_password="",
+        db_name="pytest",
+        driver=driver,
+    )
+    cluster.migrate("pytest", DOWN_MIGRATIONS, cluster_name=CLUSTER_NAME)
+    assert cluster.rollback("pytest", DOWN_MIGRATIONS, steps=1) == [2]
+
+    assert [
+        m.version
+        for m in cluster.migrate("pytest", DOWN_MIGRATIONS, cluster_name=CLUSTER_NAME)
+    ] == [2]
+
+    assert _states(cluster) == {1: STATUS_APPLIED, 2: STATUS_APPLIED}
+    # ... and the next `down` rolls back 2 again, not 1.
+    assert cluster.rollback("pytest", DOWN_MIGRATIONS, steps=1) == [2]
+    assert _states(cluster) == {1: STATUS_APPLIED, 2: STATUS_PENDING}
