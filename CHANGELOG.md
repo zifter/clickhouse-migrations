@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [v0.16.2](https://github.com/zifter/clickhouse-migrations/tree/v0.16.2) (2026-11-03)
+
+[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.16.1...v0.16.2)
+
+**What's Changed:**
+- Fix `migrate` after `down` with `--cluster-name` on ClickHouse 26.x: the re-inserted row of the rolled-back migration was dropped by insert deduplication on the `ReplicatedMergeTree` migrations table (on 26.x the block hash no longer covers `created_at DEFAULT now()`), so the migration stayed pending, ran again on the next `migrate`, and the next `down` rolled back the previous migration instead. `--fake` had the same problem. Every insert into the migrations table now sends its own `insert_deduplication_token`; deduplication of inserts inside migrations is unchanged. Reported in https://github.com/zifter/clickhouse-migrations/issues/122. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/123.
+- Internal: `Connection.insert` takes optional per-insert `settings`; a custom `Connection` subclass must accept them. The release process is documented in CONTRIBUTING. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/121 and https://github.com/zifter/clickhouse-migrations/pull/123.
+
 ## [v0.16.1](https://github.com/zifter/clickhouse-migrations/tree/v0.16.1) (2026-10-29)
 
 [Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.16.0...v0.16.1)
