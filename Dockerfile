@@ -1,5 +1,5 @@
 # ---- build stage: build a wheel from the source tree ----
-FROM python:3.13-slim AS build
+FROM python:3.15-slim AS build
 
 WORKDIR /src
 COPY . .
@@ -13,7 +13,7 @@ ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 RUN pip install --no-cache-dir build && python -m build --wheel --outdir /dist
 
 # ---- runtime stage: install just the wheel + runtime deps ----
-FROM python:3.13-slim
+FROM python:3.15-slim
 
 LABEL org.opencontainers.image.source="https://github.com/zifter/clickhouse-migrations"
 LABEL org.opencontainers.image.description="Simple file-based schema migrations for ClickHouse"
