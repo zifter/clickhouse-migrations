@@ -20,3 +20,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # clickhouse-driver has no cp315 wheels yet, and python:*-slim has no gcc
+      # to build it from source. Drop this once
+      # https://pypi.org/project/clickhouse-driver/ ships cp315 wheels.
+      - dependency-name: "python"
+        versions: [">=3.15"]
