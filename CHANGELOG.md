@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [v0.16.3](https://github.com/zifter/clickhouse-migrations/tree/v0.16.3) (2026-11-15)
+
+[Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.16.2...v0.16.3)
+
+**What's Changed:**
+- Support Python 3.15: CI runs the whole suite (unit + integration) on 3.15, and the package declares it in its classifiers. clickhouse-driver has no 3.15 wheels yet, so on 3.15 pip builds it from source, which needs a C compiler. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/127.
+- Docker image: the base image moves from `python:3.13-slim` (security fixes only since 2026-10-01) to `python:3.14-slim`. It stays off 3.15 until clickhouse-driver ships 3.15 wheels, and Dependabot ignores `python >=3.15` until then. Done by @zifter in https://github.com/zifter/clickhouse-migrations/pull/127.
+- Internal: `pytest` is bumped to 9.2.0. Done by @dependabot in https://github.com/zifter/clickhouse-migrations/pull/125.
+
 ## [v0.16.2](https://github.com/zifter/clickhouse-migrations/tree/v0.16.2) (2026-11-03)
 
 [Full Changelog](https://github.com/zifter/clickhouse-migrations/compare/v0.16.1...v0.16.2)
